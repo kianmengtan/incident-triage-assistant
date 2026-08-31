@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Product style reference</title>
+<style>
+/* ============================================================
+   PRODUCT design tokens
+   Warm, roomy, considered. Built for something a customer chose
+   to open: room to breathe, a serif that has an opinion, and
+   surfaces that feel like paper rather than panels.
+   ============================================================ */
+:root {
+  /* Surfaces */
+  --color-bg:        #FBF7F1;
+  --color-surface:   #FFFFFF;
+  --color-raised:    #F4EDE3;
+  --color-border:    #E8DFD2;
+  --color-border-strong: #D3C5B1;
+
+  /* Ink: warm-tinted, never neutral gray */
+  --color-ink:       #241C15;
+  --color-ink-muted: #5C4F42;
+  --color-ink-faint: #877868;
+  --color-ink-invert:#FFFDFA;
+
+  /* Accent + status */
+  --color-accent:      #A6482B;
+  --color-accent-hover:#8A3A21;
+  --color-accent-soft: #F7E9E2;
+  --color-secondary:   #2F5D50;
+  --color-success:     #2F5D50;
+  --color-success-soft:#E4EEE9;
+  --color-warning:     #8A5B12;
+  --color-warning-soft:#F8EEDC;
+  --color-danger:      #9E2B25;
+  --color-danger-soft: #F8E6E4;
+
+  /* Type */
+  --font-display: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  --font-body:    system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --text-sm:   14px;
+  --text-base: 17px;
+  --text-md:   20px;
+  --text-lg:   26px;
+  --text-xl:   36px;
+  --text-2xl:  52px;
+  --leading-tight: 1.15;
+  --leading-body:  1.65;
+
+  /* Space: 8px base, generous by design */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 16px;
+  --space-4: 24px;
+  --space-5: 32px;
+  --space-6: 48px;
+  --space-7: 72px;
+  --space-8: 112px;
+
+  --radius-sm: 8px;
+  --radius:    14px;
+  --radius-lg: 22px;
+  --radius-pill: 999px;
+
+  --shadow-sm: 0 1px 2px rgba(36, 28, 21, 0.05), 0 2px 8px rgba(36, 28, 21, 0.05);
+  --shadow:    0 2px 4px rgba(36, 28, 21, 0.05), 0 12px 28px rgba(36, 28, 21, 0.09);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  line-height: var(--leading-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrap { max-width: 1000px; margin: 0 auto; padding: var(--space-7) var(--space-4) var(--space-8); }
+
+/* ---------- masthead ---------- */
+.masthead { margin-bottom: var(--space-7); }
+.tag { display: inline-block; font-size: var(--text-sm); background: var(--color-accent-soft); color: var(--color-accent); border-radius: var(--radius-pill); padding: var(--space-1) var(--space-3); margin-bottom: var(--space-4); font-weight: 600; }
+.masthead h1 { font-family: var(--font-display); font-size: var(--text-2xl); line-height: var(--leading-tight); margin: 0 0 var(--space-3); font-weight: 600; letter-spacing: -0.022em; }
+.masthead p { margin: 0; color: var(--color-ink-muted); max-width: 68ch; font-size: var(--text-md); line-height: 1.55; }
+
+.note { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius); padding: var(--space-4); margin-top: var(--space-5); max-width: 76ch; box-shadow: var(--shadow-sm); }
+.note strong { font-weight: 640; }
+
+/* ---------- section rhythm ---------- */
+section { margin-top: var(--space-8); }
+section > h2 { font-family: var(--font-display); font-size: var(--text-lg); font-weight: 600; margin: 0 0 var(--space-4); letter-spacing: -0.015em; }
+h3 { font-size: var(--text-sm); font-weight: 640; color: var(--color-ink-faint); margin: var(--space-5) 0 var(--space-3); }
+
+/* ---------- swatches ---------- */
+.swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: var(--space-3); }
+.swatch { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius); padding: var(--space-3); box-shadow: var(--shadow-sm); }
+.chip { height: 56px; border-radius: var(--radius-sm); border: 1px solid rgba(36,28,21,0.08); margin-bottom: var(--space-3); }
+.swatch code { display: block; font-size: var(--text-sm); font-weight: 600; }
+.swatch .hex { color: var(--color-ink-faint); font-size: var(--text-sm); }
+.swatch .role { color: var(--color-ink-muted); font-size: var(--text-sm); margin-top: var(--space-1); line-height: 1.4; }
+
+/* ---------- type specimens ---------- */
+.type-row { display: grid; grid-template-columns: 150px 1fr; gap: var(--space-4); padding: var(--space-4) 0; border-bottom: 1px solid var(--color-border); align-items: baseline; }
+.type-row:last-child { border-bottom: 0; }
+.type-meta { font-size: var(--text-sm); color: var(--color-ink-faint); line-height: 1.4; }
+.serif { font-family: var(--font-display); }
+
+/* ---------- space scale ---------- */
+.space-row { display: grid; grid-template-columns: 130px 1fr; gap: var(--space-3); align-items: center; padding: var(--space-2) 0; }
+.bar { height: 14px; background: var(--color-accent); border-radius: var(--radius-pill); }
+
+/* ---------- buttons ---------- */
+.btn { font: inherit; font-size: var(--text-base); font-weight: 600; border-radius: var(--radius-pill); padding: 11px var(--space-4); border: 1.5px solid transparent; cursor: pointer; transition: background-color 140ms cubic-bezier(0.2,0.7,0.3,1), box-shadow 140ms cubic-bezier(0.2,0.7,0.3,1); }
+.btn:focus-visible, .is-focus { outline: 2.5px solid var(--color-secondary); outline-offset: 2px; }
+.btn-primary { background: var(--color-accent); color: var(--color-ink-invert); box-shadow: var(--shadow-sm); }
+.btn-primary:hover { background: var(--color-accent-hover); box-shadow: var(--shadow); }
+.btn-secondary { background: var(--color-surface); color: var(--color-ink); border-color: var(--color-border-strong); }
+.btn-secondary:hover { background: var(--color-raised); }
+.btn-quiet { background: transparent; color: var(--color-accent); padding-left: var(--space-3); padding-right: var(--space-3); }
+.btn-quiet:hover { background: var(--color-accent-soft); }
+.btn-danger { background: var(--color-danger); color: var(--color-ink-invert); }
+.btn-danger:hover { background: #83211C; }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: none; }
+.row { display: flex; gap: var(--space-3); flex-wrap: wrap; align-items: center; }
+.label-inline { font-size: var(--text-sm); color: var(--color-ink-faint); width: 86px; flex: none; }
+.state-row { display: flex; gap: var(--space-3); align-items: center; padding: var(--space-3) 0; }
+
+/* ---------- form controls ---------- */
+.field { margin-bottom: var(--space-4); max-width: 380px; }
+.field label { display: block; font-size: var(--text-sm); font-weight: 640; margin-bottom: var(--space-2); }
+.input { width: 100%; font: inherit; font-size: var(--text-base); padding: 11px var(--space-3); border: 1.5px solid var(--color-border-strong); border-radius: var(--radius-sm); background: var(--color-surface); color: var(--color-ink); }
+.input::placeholder { color: var(--color-ink-faint); }
+.input:focus, .input.is-focus { outline: 2.5px solid var(--color-secondary); outline-offset: 2px; border-color: var(--color-secondary); }
+.input.is-error { border-color: var(--color-danger); }
+.input:disabled { background: var(--color-raised); color: var(--color-ink-faint); cursor: not-allowed; }
+.help { font-size: var(--text-sm); color: var(--color-ink-muted); margin-top: var(--space-2); }
+.help.is-error { color: var(--color-danger); }
+
+/* ---------- card + table ---------- */
+.card { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius); box-shadow: var(--shadow-sm); padding: var(--space-4); }
+.card h4 { font-family: var(--font-display); margin: 0 0 var(--space-2); font-size: var(--text-md); font-weight: 600; }
+.card p { margin: 0; color: var(--color-ink-muted); }
+
+table { width: 100%; border-collapse: collapse; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow-sm); }
+th { text-align: left; font-weight: 640; color: var(--color-ink-muted); font-size: var(--text-sm); padding: var(--space-3); border-bottom: 1px solid var(--color-border); }
+td { padding: var(--space-3); border-bottom: 1px solid var(--color-border); }
+tbody tr:last-child td { border-bottom: 0; }
+.num { font-variant-numeric: tabular-nums; text-align: right; }
+
+/* ---------- alerts + badges ---------- */
+.alert { border: 1px solid; border-radius: var(--radius-sm); padding: var(--space-3) var(--space-4); margin-bottom: var(--space-3); }
+.alert-info    { background: var(--color-raised);        border-color: var(--color-border-strong); color: var(--color-ink); }
+.alert-success { background: var(--color-success-soft);  border-color: #C4DBD2; color: #1F4238; }
+.alert-warning { background: var(--color-warning-soft);  border-color: #E6D3AE; color: #6A450C; }
+.alert-danger  { background: var(--color-danger-soft);   border-color: #EFC7C4; color: #7B211C; }
+
+.badge { display: inline-block; font-size: var(--text-sm); font-weight: 600; padding: 2px var(--space-3); border-radius: var(--radius-pill); }
+.badge-neutral { background: var(--color-raised); color: var(--color-ink-muted); }
+.badge-success { background: var(--color-success-soft); color: #1F4238; }
+.badge-warning { background: var(--color-warning-soft); color: #6A450C; }
+.badge-danger  { background: var(--color-danger-soft);  color: #7B211C; }
+
+/* ---------- empty state ---------- */
+.empty { border: 1.5px dashed var(--color-border-strong); border-radius: var(--radius); padding: var(--space-6); text-align: center; color: var(--color-ink-muted); background: var(--color-surface); }
+.empty strong { display: block; font-family: var(--font-display); font-size: var(--text-md); color: var(--color-ink); font-weight: 600; margin-bottom: var(--space-2); }
+
+.grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: var(--space-3); }
+
+footer { margin-top: var(--space-8); padding-top: var(--space-4); border-top: 1px solid var(--color-border-strong); color: var(--color-ink-muted); }
+footer strong { font-family: var(--font-display); font-size: var(--text-md); color: var(--color-ink); }
+footer ul { margin: var(--space-3) 0 0; padding-left: var(--space-4); max-width: 72ch; }
+footer li { margin-bottom: var(--space-2); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="masthead">
+    <span class="tag">product</span>
+    <h1>Product</h1>
+    <p>Warm, roomy and considered. For something a customer chose to open: room to breathe, a serif with an opinion, and surfaces that read like paper rather than panels.</p>
+    <div class="note">
+      <strong>This is a style reference, not a page to copy.</strong> Match the tokens, spacing and component shapes below. Do not reuse this page's wording, sections or layout. Your application has its own content and structure.
+    </div>
+  </header>
+
+  <section>
+    <h2>Colour</h2>
+    <div class="swatches">
+      <div class="swatch"><div class="chip" style="background:#FBF7F1"></div><code>--color-bg</code><span class="hex">#FBF7F1</span><div class="role">Page background</div></div>
+      <div class="swatch"><div class="chip" style="background:#FFFFFF"></div><code>--color-surface</code><span class="hex">#FFFFFF</span><div class="role">Cards, inputs, tables</div></div>
+      <div class="swatch"><div class="chip" style="background:#F4EDE3"></div><code>--color-raised</code><span class="hex">#F4EDE3</span><div class="role">Quiet fills, hover</div></div>
+      <div class="swatch"><div class="chip" style="background:#E8DFD2"></div><code>--color-border</code><span class="hex">#E8DFD2</span><div class="role">Dividers, card edges</div></div>
+      <div class="swatch"><div class="chip" style="background:#D3C5B1"></div><code>--color-border-strong</code><span class="hex">#D3C5B1</span><div class="role">Input edges</div></div>
+      <div class="swatch"><div class="chip" style="background:#241C15"></div><code>--color-ink</code><span class="hex">#241C15</span><div class="role">Primary text</div></div>
+      <div class="swatch"><div class="chip" style="background:#5C4F42"></div><code>--color-ink-muted</code><span class="hex">#5C4F42</span><div class="role">Secondary text</div></div>
+      <div class="swatch"><div class="chip" style="background:#877868"></div><code>--color-ink-faint</code><span class="hex">#877868</span><div class="role">Placeholders, meta</div></div>
+      <div class="swatch"><div class="chip" style="background:#A6482B"></div><code>--color-accent</code><span class="hex">#A6482B</span><div class="role">Primary action</div></div>
+      <div class="swatch"><div class="chip" style="background:#2F5D50"></div><code>--color-secondary</code><span class="hex">#2F5D50</span><div class="role">Focus rings, success</div></div>
+      <div class="swatch"><div class="chip" style="background:#8A5B12"></div><code>--color-warning</code><span class="hex">#8A5B12</span><div class="role">Warning</div></div>
+      <div class="swatch"><div class="chip" style="background:#9E2B25"></div><code>--color-danger</code><span class="hex">#9E2B25</span><div class="role">Destructive, errors</div></div>
+    </div>
+    <p class="help">The palette is warm throughout, and even the greys carry the background's hue. Focus rings use the green rather than the terracotta so they never read as an error.</p>
+  </section>
+
+  <section>
+    <h2>Type</h2>
+    <p class="help">Display: a system serif. Body and UI: <code>system-ui</code>. The pairing is the loudest thing about this theme, so keep it.</p>
+    <div class="type-row"><div class="type-meta">--text-2xl<br>52px · serif · 600</div><div class="serif" style="font-size:52px;font-weight:600;letter-spacing:-0.022em;line-height:1.15">Everything in one place</div></div>
+    <div class="type-row"><div class="type-meta">--text-xl<br>36px · serif · 600</div><div class="serif" style="font-size:36px;font-weight:600;letter-spacing:-0.02em;line-height:1.2">How it works</div></div>
+    <div class="type-row"><div class="type-meta">--text-lg<br>26px · serif · 600</div><div class="serif" style="font-size:26px;font-weight:600;letter-spacing:-0.015em">Your recent orders</div></div>
+    <div class="type-row"><div class="type-meta">--text-md<br>20px · sans · 400</div><div style="font-size:20px;line-height:1.55;max-width:68ch">A lead paragraph, one step up from body, used once at the top of a section.</div></div>
+    <div class="type-row"><div class="type-meta">--text-base<br>17px · sans · 400</div><div style="max-width:70ch">Body text at a comfortable reading size. The measure stays between 65 and 75 characters, and line height is generous. This theme is meant to be read, not scanned.</div></div>
+    <div class="type-row"><div class="type-meta">--text-sm<br>14px · sans · 400</div><div style="color:var(--color-ink-muted)">Help text, captions and metadata.</div></div>
+  </section>
+
+  <section>
+    <h2>Space &amp; radius</h2>
+    <div class="space-row"><span class="type-meta">--space-2 · 8px</span><div class="bar" style="width:8px"></div></div>
+    <div class="space-row"><span class="type-meta">--space-3 · 16px</span><div class="bar" style="width:16px"></div></div>
+    <div class="space-row"><span class="type-meta">--space-4 · 24px</span><div class="bar" style="width:24px"></div></div>
+    <div class="space-row"><span class="type-meta">--space-5 · 32px</span><div class="bar" style="width:32px"></div></div>
+    <div class="space-row"><span class="type-meta">--space-6 · 48px</span><div class="bar" style="width:48px"></div></div>
+    <div class="space-row"><span class="type-meta">--space-7 · 72px</span><div class="bar" style="width:72px"></div></div>
+    <div class="space-row"><span class="type-meta">--space-8 · 112px</span><div class="bar" style="width:112px"></div></div>
+    <h3>Radius</h3>
+    <div class="row">
+      <div style="width:80px;height:52px;background:var(--color-surface);border:1px solid var(--color-border-strong);border-radius:8px"></div>
+      <span class="type-meta">--radius-sm 8px</span>
+      <div style="width:80px;height:52px;background:var(--color-surface);border:1px solid var(--color-border-strong);border-radius:14px"></div>
+      <span class="type-meta">--radius 14px</span>
+      <div style="width:80px;height:52px;background:var(--color-surface);border:1px solid var(--color-border-strong);border-radius:22px"></div>
+      <span class="type-meta">--radius-lg 22px</span>
+      <div style="width:110px;height:52px;background:var(--color-surface);border:1px solid var(--color-border-strong);border-radius:999px"></div>
+      <span class="type-meta">--radius-pill</span>
+    </div>
+    <p class="help">Buttons and badges are fully rounded; containers are softly rounded. Shadows always carry an offset and a wide blur, never a zero-offset halo.</p>
+  </section>
+
+  <section>
+    <h2>Buttons</h2>
+    <div class="state-row"><span class="label-inline">default</span><div class="row">
+      <button class="btn btn-primary">Start free</button>
+      <button class="btn btn-secondary">Learn more</button>
+      <button class="btn btn-quiet">Skip for now</button>
+      <button class="btn btn-danger">Delete account</button>
+    </div></div>
+    <div class="state-row"><span class="label-inline">focus</span><div class="row">
+      <button class="btn btn-primary is-focus">Start free</button>
+      <button class="btn btn-secondary is-focus">Learn more</button>
+    </div></div>
+    <div class="state-row"><span class="label-inline">disabled</span><div class="row">
+      <button class="btn btn-primary" disabled>Start free</button>
+      <button class="btn btn-secondary" disabled>Learn more</button>
+      <button class="btn btn-danger" disabled>Delete account</button>
+    </div></div>
+    <p class="help">Hover the live buttons above to see the lift. The primary button's hover deepens the fill and widens the shadow together.</p>
+  </section>
+
+  <section>
+    <h2>Form controls</h2>
+    <div class="grid-2">
+      <div>
+        <div class="field">
+          <label for="p1">Full name</label>
+          <input class="input" id="p1" value="Ada Lovelace">
+        </div>
+        <div class="field">
+          <label for="p2">Email address</label>
+          <input class="input is-focus" id="p2" placeholder="you@example.com">
+          <div class="help">Focused state.</div>
+        </div>
+      </div>
+      <div>
+        <div class="field">
+          <label for="p3">Postcode</label>
+          <input class="input is-error" id="p3" value="00000">
+          <div class="help is-error">We don't recognise that postcode. Check it and try again.</div>
+        </div>
+        <div class="field">
+          <label for="p4">Plan</label>
+          <input class="input" id="p4" value="Team (annual)" disabled>
+          <div class="help">Disabled. Change this from billing.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Table</h2>
+    <table>
+      <thead><tr><th>Order</th><th>Placed</th><th>Status</th><th class="num">Total</th></tr></thead>
+      <tbody>
+        <tr><td>Linen apron</td><td>12 August</td><td><span class="badge badge-success">Delivered</span></td><td class="num">£48.00</td></tr>
+        <tr><td>Cast iron pan</td><td>9 August</td><td><span class="badge badge-neutral">In transit</span></td><td class="num">£112.00</td></tr>
+        <tr><td>Spice set</td><td>3 August</td><td><span class="badge badge-warning">Delayed</span></td><td class="num">£26.50</td></tr>
+        <tr><td>Ceramic mug</td><td>28 July</td><td><span class="badge badge-danger">Refunded</span></td><td class="num">£18.00</td></tr>
+      </tbody>
+    </table>
+    <p class="help">Tables here breathe: 16px cell padding, no zebra striping, one hairline between rows.</p>
+  </section>
+
+  <section>
+    <h2>Cards, alerts &amp; badges</h2>
+    <div class="grid-2" style="margin-bottom:var(--space-4)">
+      <div class="card"><h4>Free returns</h4><p>Send anything back within 30 days, for any reason. We cover the postage.</p></div>
+      <div class="card"><h4>Made to last</h4><p>Everything we sell carries a two-year guarantee against manufacturing faults.</p></div>
+    </div>
+    <div class="alert alert-info">Your order will arrive between Tuesday and Thursday next week.</div>
+    <div class="alert alert-success">Payment received. A receipt is on its way to your inbox.</div>
+    <div class="alert alert-warning">One item is out of stock. The rest of your order will ship today.</div>
+    <div class="alert alert-danger">We couldn't take payment with that card. Try another, or use a different method.</div>
+    <div class="row" style="margin-top:var(--space-4)">
+      <span class="badge badge-neutral">Draft</span>
+      <span class="badge badge-success">Delivered</span>
+      <span class="badge badge-warning">Delayed</span>
+      <span class="badge badge-danger">Refunded</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>Empty state</h2>
+    <div class="empty">
+      <strong>Nothing here yet</strong>
+      When you place your first order, it'll show up here with its delivery updates.
+    </div>
+  </section>
+
+  <footer>
+    <strong>Using this reference</strong>
+    <ul>
+      <li>Lift the custom properties from <code>:root</code> verbatim. Do not invent adjacent shades.</li>
+      <li>Keep the room: 17px body, 8px spacing base, and generous vertical gaps between sections.</li>
+      <li>Keep the serif for display type and the sans for everything else. The pairing is the theme.</li>
+      <li>Buttons and badges are pill-shaped; containers use 14px corners.</li>
+      <li>Every interactive element keeps a visible focus ring, in the green rather than the accent.</li>
+    </ul>
+  </footer>
+
+</div>
+</body>
+</html>
