@@ -3,10 +3,13 @@ set -euo pipefail
 
 PREFIX="app-b9dac5ac-bc8fbf47"
 REGION="ap-southeast-1"
-STACK_NAME="${STACK_NAME:-${PREFIX}-triage}"
+TIMESTAMP=$(date +%s)
+STACK_NAME="${STACK_NAME:-${PREFIX}-triage-${TIMESTAMP}}"
 ARTIFACTS_BUCKET="${TEMPLATE_BUCKET:-${PREFIX}-artifacts}"
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
+
+echo "==> Deploying to new stack: ${STACK_NAME}"
 
 echo "==> Checking for an existing ${STACK_NAME} stack in a failed/rollback state"
 STACK_STATUS=$(aws cloudformation describe-stacks \
