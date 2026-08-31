@@ -18,7 +18,7 @@ STACK_STATUS=$(aws cloudformation describe-stacks \
   --output text 2>/dev/null || echo "STACK_NOT_FOUND")
 
 case "${STACK_STATUS}" in
-  CREATE_FAILED|ROLLBACK_COMPLETE|ROLLBACK_IN_PROGRESS|UPDATE_FAILED|UPDATE_ROLLBACK_COMPLETE|UPDATE_ROLLBACK_IN_PROGRESS)
+  CREATE_FAILED|ROLLBACK_COMPLETE|ROLLBACK_IN_PROGRESS|ROLLBACK_FAILED|UPDATE_FAILED|UPDATE_ROLLBACK_COMPLETE|UPDATE_ROLLBACK_IN_PROGRESS|DELETE_FAILED)
     echo "==> Stack ${STACK_NAME} is in ${STACK_STATUS}; deleting it before redeploying"
     aws cloudformation delete-stack --stack-name "${STACK_NAME}" --region "${REGION}"
     if ! timeout 300 aws cloudformation wait stack-delete-complete \
