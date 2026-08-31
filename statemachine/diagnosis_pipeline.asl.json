@@ -1,0 +1,181 @@
+{
+  "Comment": "Alert diagnosis pipeline: correlate -> RAG -> RCA -> runbook -> notify",
+  "StartAt": "CorrelateContext",
+  "States": {
+    "CorrelateContext": {
+      "Type": "Parallel",
+      "Branches": [
+        {
+          "StartAt": "CorrelateLogs",
+          "States": {
+            "CorrelateLogs": {
+              "Type": "Task",
+              "Resource": "${CorrelateLogsFunctionArn}",
+              "Retry": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "IntervalSeconds": 2,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "CorrelateConfig",
+          "States": {
+            "CorrelateConfig": {
+              "Type": "Task",
+              "Resource": "${CorrelateConfigFunctionArn}",
+              "Retry": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "IntervalSeconds": 2,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultSelector": {
+        "logs_context.$": "$[0]",
+        "config_context.$": "$[1]"
+      },
+      "ResultPath": "$.correlation",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "HandleFailure"
+        }
+      ],
+      "Next": "MergeCorrelation"
+    },
+    "MergeCorrelation": {
+      "Type": "Pass",
+      "Parameters": {
+        "tenant_id.$": "$.tenant_id",
+        "alert_id.$": "$.alert_id",
+        "received_at.$": "$.received_at",
+        "alert.$": "$.alert",
+        "logs_context.$": "$.correlation.logs_context",
+        "config_context.$": "$.correlation.config_context"
+      },
+      "Next": "BuildRagContext"
+    },
+    "BuildRagContext": {
+      "Type": "Task",
+      "Resource": "${RagContextFunctionArn}",
+      "ResultPath": "$.rag_context",
+      "Retry": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "HandleFailure"
+        }
+      ],
+      "Next": "GenerateRca"
+    },
+    "GenerateRca": {
+      "Type": "Task",
+      "Resource": "${GenerateRcaFunctionArn}",
+      "ResultPath": "$.diagnostic",
+      "Retry": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "HandleFailure"
+        }
+      ],
+      "Next": "GenerateRunbook"
+    },
+    "GenerateRunbook": {
+      "Type": "Task",
+      "Resource": "${GenerateRunbookFunctionArn}",
+      "ResultPath": "$.runbook",
+      "Retry": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "HandleFailure"
+        }
+      ],
+      "Next": "NotifyRunbookReady"
+    },
+    "NotifyRunbookReady": {
+      "Type": "Task",
+      "Resource": "${NotifyFunctionArn}",
+      "ResultPath": "$.notification",
+      "Retry": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "HandleFailure"
+        }
+      ],
+      "End": true
+    },
+    "HandleFailure": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sqs:sendMessage",
+      "Parameters": {
+        "QueueUrl": "${AlertBufferDlqUrl}",
+        "MessageBody.$": "States.JsonToString($)"
+      },
+      "ResultPath": null,
+      "Next": "NotifyOpsFailure"
+    },
+    "NotifyOpsFailure": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${OpsAlarmsTopicArn}",
+        "Subject": "Diagnosis pipeline failure",
+        "Message.$": "States.JsonToString($)"
+      },
+      "ResultPath": null,
+      "Next": "PipelineFailed"
+    },
+    "PipelineFailed": {
+      "Type": "Fail",
+      "Error": "DiagnosisPipelineFailed"
+    }
+  }
+}

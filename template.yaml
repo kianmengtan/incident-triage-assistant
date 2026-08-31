@@ -1,0 +1,888 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Incident Triage Assistant - automated outage diagnosis and remediation
+  (alert ingestion -> log/config correlation -> RAG -> Bedrock RCA -> runbook
+  -> gated remediation), multi-tenant, per platform contract app-b9dac5ac-bc8fbf47.
+
+Globals:
+  Function:
+    Runtime: python3.13
+    Timeout: 30
+    MemorySize: 256
+    Tracing: Active
+    PermissionsBoundary: arn:aws:iam::544635841962:policy/brd-architect-deploy-boundary
+    Layers:
+      - !Ref CommonLayer
+    Environment:
+      Variables:
+        TENANTS_TABLE: !Ref TenantsTable
+        ALERTS_TABLE: !Ref AlertsTable
+        DIAGNOSTICS_TABLE: !Ref DiagnosticsTable
+        RUNBOOKS_TABLE: !Ref RunbooksTable
+        AUDIT_TABLE: !Ref AuditTrailTable
+        CONTEXT_CACHE_BUCKET: !Ref ContextCacheBucket
+        RUNBOOKS_BUCKET: !Ref RunbooksBucket
+        VECTOR_BUCKET: app-b9dac5ac-bc8fbf47-vectors
+        VECTOR_INDEX: incidents
+        RUNBOOK_READY_TOPIC_ARN: !Ref RunbookReadyTopic
+        OPS_ALARMS_TOPIC_ARN: !Ref OpsAlarmsTopic
+        TENANT_SCOPED_ROLE_ARN: !GetAtt TenantScopedRole.Arn
+        USER_POOL_ID: ''
+
+Resources:
+
+  # ---------------------------------------------------------------------
+  # Shared Lambda layer (common/ helper modules + boto3/cryptography)
+  # ---------------------------------------------------------------------
+  CommonLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: app-b9dac5ac-bc8fbf47-layer-common
+      ContentUri: src/layer/
+      CompatibleRuntimes:
+        - python3.13
+      RetentionPolicy: Delete
+    Metadata:
+      BuildMethod: python3.13
+
+  # ---------------------------------------------------------------------
+  # DynamoDB tables
+  # ---------------------------------------------------------------------
+  TenantsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: app-b9dac5ac-bc8fbf47-tenants
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: tenant_id
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: tenant_id
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+      SSESpecification:
+        SSEEnabled: true
+
+  AlertsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: app-b9dac5ac-bc8fbf47-alerts
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: tenant_id
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: tenant_id
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+      SSESpecification:
+        SSEEnabled: true
+
+  DiagnosticsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: app-b9dac5ac-bc8fbf47-diagnostics
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: tenant_id
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: tenant_id
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+      SSESpecification:
+        SSEEnabled: true
+
+  RunbooksTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: app-b9dac5ac-bc8fbf47-runbooks
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: tenant_id
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+        - AttributeName: status
+          AttributeType: S
+      KeySchema:
+        - AttributeName: tenant_id
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: status-index
+          KeySchema:
+            - AttributeName: tenant_id
+              KeyType: HASH
+            - AttributeName: status
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      SSESpecification:
+        SSEEnabled: true
+
+  AuditTrailTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: app-b9dac5ac-bc8fbf47-audit-trail
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: tenant_id
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: tenant_id
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+      SSESpecification:
+        SSEEnabled: true
+
+  # ---------------------------------------------------------------------
+  # S3 buckets (tenant-prefixed objects, default SSE-S3 encryption)
+  # ---------------------------------------------------------------------
+  ContextCacheBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub app-b9dac5ac-bc8fbf47-context-cache-${AWS::AccountId}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-context-cache
+            Status: Enabled
+            ExpirationInDays: 30
+
+  RunbooksBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub app-b9dac5ac-bc8fbf47-runbooks-${AWS::AccountId}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  AuditExportsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub app-b9dac5ac-bc8fbf47-audit-exports-${AWS::AccountId}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # ---------------------------------------------------------------------
+  # S3 Vectors bucket + index (created via custom resource; not yet a
+  # native CloudFormation resource type)
+  # ---------------------------------------------------------------------
+  S3VectorsSetupFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: app-b9dac5ac-bc8fbf47-fn-s3vectors-setup
+      CodeUri: src/handlers/
+      Handler: s3vectors_setup.handler
+      Timeout: 60
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - s3vectors:CreateVectorBucket
+                - s3vectors:GetVectorBucket
+                - s3vectors:DeleteVectorBucket
+                - s3vectors:CreateIndex
+                - s3vectors:GetIndex
+                - s3vectors:DeleteIndex
+              Resource: '*'
+
+  S3VectorsSetup:
+    Type: Custom::S3VectorsSetup
+    Properties:
+      ServiceToken: !GetAtt S3VectorsSetupFunction.Arn
+
+  # ---------------------------------------------------------------------
+  # SQS buffer queue + DLQ
+  # ---------------------------------------------------------------------
+  AlertBufferDlq:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: app-b9dac5ac-bc8fbf47-queue-alert-buffer-dlq
+      MessageRetentionPeriod: 1209600
+
+  AlertBufferQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: app-b9dac5ac-bc8fbf47-queue-alert-buffer
+      VisibilityTimeout: 360
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt AlertBufferDlq.Arn
+        maxReceiveCount: 3
+
+  # ---------------------------------------------------------------------
+  # SNS topics
+  # ---------------------------------------------------------------------
+  RunbookReadyTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: app-b9dac5ac-bc8fbf47-topic-runbook-ready
+
+  OpsAlarmsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: app-b9dac5ac-bc8fbf47-topic-ops-alarms
+
+  # ---------------------------------------------------------------------
+  # Cognito
+  # ---------------------------------------------------------------------
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: app-b9dac5ac-bc8fbf47-cognito-userpool
+      MfaConfiguration: 'OFF'
+      AutoVerifiedAttributes:
+        - email
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Required: true
+          Mutable: true
+        - Name: tenant_id
+          AttributeDataType: String
+          Mutable: true
+          Required: false
+      LambdaConfig:
+        PostConfirmation: !GetAtt TenantProvisionFunction.Arn
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: app-b9dac5ac-bc8fbf47-app-client
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+      WriteAttributes:
+        - email
+        - custom:tenant_id
+
+  TenantAdminGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: TenantAdmin
+      UserPoolId: !Ref UserPool
+
+  TenantEngineerGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: TenantEngineer
+      UserPoolId: !Ref UserPool
+
+  TenantLeadershipGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: TenantLeadership
+      UserPoolId: !Ref UserPool
+
+  UserPoolInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref TenantProvisionFunction
+      Action: lambda:InvokeFunction
+      Principal: cognito-idp.amazonaws.com
+      SourceArn: !GetAtt UserPool.Arn
+
+  # ---------------------------------------------------------------------
+  # Tenant-scoped data-plane role (assumed by pipeline/query Lambdas with
+  # a tenant_id session tag; its own policy restricts DynamoDB LeadingKeys
+  # and S3 key prefixes to that tag, enforcing IAM-level tenant isolation)
+  # ---------------------------------------------------------------------
+  TenantScopedRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: app-b9dac5ac-bc8fbf47-role-tenant-scoped
+      PermissionsBoundary: arn:aws:iam::544635841962:policy/brd-architect-deploy-boundary
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+            Action: sts:AssumeRole
+            Condition:
+              ArnLike:
+                aws:PrincipalArn: !Sub arn:aws:iam::${AWS::AccountId}:role/app-b9dac5ac-bc8fbf47-*
+      Policies:
+        - PolicyName: tenant-scoped-data-access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:Query
+                Resource:
+                  - !GetAtt TenantsTable.Arn
+                  - !GetAtt AlertsTable.Arn
+                  - !GetAtt DiagnosticsTable.Arn
+                  - !GetAtt RunbooksTable.Arn
+                  - !Sub ${RunbooksTable.Arn}/index/*
+                  - !GetAtt AuditTrailTable.Arn
+                Condition:
+                  ForAllValues:StringEquals:
+                    dynamodb:LeadingKeys:
+                      - ${aws:PrincipalTag/tenant_id}
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource:
+                  - !Sub ${ContextCacheBucket.Arn}/tenant/${!aws:PrincipalTag/tenant_id}/*
+                  - !Sub ${RunbooksBucket.Arn}/tenant/${!aws:PrincipalTag/tenant_id}/*
+
+  # ---------------------------------------------------------------------
+  # Pipeline Lambda functions
+  # ---------------------------------------------------------------------
+  IngestNormalizeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: app-b9dac5ac-bc8fbf47-fn-ingest-normalize
+      CodeUri: src/handlers/
+      Handler: ingest_normalize.handler
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: events:PutEvents
+              Resource: !Sub arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+            - Effect: Allow
+              Action: sts:AssumeRole
+              Resource: !GetAtt TenantScopedRole.Arn
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:app-b9dac5ac-bc8fbf47-tenant-*-ingest-hmac-*
+      Events:
+        PostAlert:
+          Type: Api
+          Properties:
+            RestApiId: !Ref IngestionApi
+            Path: /v1/alerts
+            Method: post
+            Auth:
+              ApiKeyRequired: true
+
+  CorrelateLogsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: app-b9dac5ac-bc8fbf47-fn-correlate-logs
+      CodeUri: src/handlers/
+      Handler: correlate_logs.handler
+      Timeout: 90
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: sts:AssumeRole
+              Resource: !GetAtt TenantScopedRole.Arn
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:app-b9dac5ac-bc8fbf47-tenant-*-integration-creds-*
+
+  CorrelateConfigFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: app-b9dac5ac-bc8fbf47-fn-correlate-config
+      CodeUri: src/handlers/
+      Handler: correlate_config.handler
+      Timeout: 90
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: sts:AssumeRole
+              Resource: !GetAtt TenantScopedRole.Arn
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:app-b9dac5ac-bc8fbf47-tenant-*-integration-creds-*
+
+  RagContextFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: app-b9dac5ac-bc8fbf47-fn-rag-context
+      CodeUri: src/handlers/
+      Handler: rag_context.handler
+      Timeout: 60
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: sts:AssumeRole
+              Resource: !GetAtt TenantScopedRole.Arn
+            - Effect: Allow
+              Action: bedrock:InvokeModel
+              Resource:
+                - arn:aws:bedrock:*::foundation-model/cohere.embed-multilingual-v3
+            - Effect: Allow
+              Action:
+                - s3vectors:QueryVectors
+                - s3vectors:PutVectors
+              Resource:
+                - !Sub arn:aws:s3vectors:${AWS::Region}:${AWS::AccountId}:bucket/app-b9dac5ac-bc8fbf47-vectors
+                - !Sub arn:aws:s3vectors:${AWS::Region}:${AWS::AccountId}:bucket/app-b9dac5ac-bc8fbf47-vectors/index/*
+
+  GenerateRcaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: app-b9dac5ac-bc8fbf47-fn-generate-rca
+      CodeUri: src/handlers/
+      Handler: generate_rca.handler
+      Timeout: 60
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: sts:AssumeRole
+              Resource: !GetAtt TenantScopedRole.Arn
+            - Effect: Allow
+              Action: bedrock:InvokeModel
+              Resource:
+                - !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/global.anthropic.claude-haiku-4-5-20251001-v1:0
+                - arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0
+
+  GenerateRunbookFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: app-b9dac5ac-bc8fbf47-fn-generate-runbook
+      CodeUri: src/handlers/
+      Handler: generate_runbook.handler
+      Timeout: 60
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: sts:AssumeRole
+              Resource: !GetAtt TenantScopedRole.Arn
+            - Effect: Allow
+              Action: bedrock:InvokeModel
+              Resource:
+                - !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/global.anthropic.claude-haiku-4-5-20251001-v1:0
+                - arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0
+
+  NotifyFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: app-b9dac5ac-bc8fbf47-fn-notify
+      CodeUri: src/handlers/
+      Handler: notify.handler
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: sns:Publish
+              Resource: !Ref RunbookReadyTopic
+
+  NotifyImsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: app-b9dac5ac-bc8fbf47-fn-notify-ims
+      CodeUri: src/handlers/
+      Handler: notify_ims.handler
+      Timeout: 30
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:app-b9dac5ac-bc8fbf47-tenant-*-integration-creds-*
+
+  AuditWriteFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: app-b9dac5ac-bc8fbf47-fn-audit-write
+      CodeUri: src/handlers/
+      Handler: audit_write.handler
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: sts:AssumeRole
+              Resource: !GetAtt TenantScopedRole.Arn
+
+  TenantProvisionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: app-b9dac5ac-bc8fbf47-fn-tenant-provision
+      CodeUri: src/handlers/
+      Handler: tenant_provision.handler
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: dynamodb:PutItem
+              Resource: !GetAtt TenantsTable.Arn
+            - Effect: Allow
+              Action: secretsmanager:CreateSecret
+              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:app-b9dac5ac-bc8fbf47-tenant-*
+
+  AuthorizerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: app-b9dac5ac-bc8fbf47-fn-authorizer
+      CodeUri: src/handlers/
+      Handler: authorizer.handler
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref UserPool
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - cognito-idp:GetUser
+                - cognito-idp:AdminListGroupsForUser
+              Resource: !GetAtt UserPool.Arn
+
+  QueryDiagnosticsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: app-b9dac5ac-bc8fbf47-fn-query-diagnostics
+      CodeUri: src/handlers/
+      Handler: query_diagnostics.handler
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: sts:AssumeRole
+              Resource: !GetAtt TenantScopedRole.Arn
+      Events:
+        GetDiagnostic:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AdminApi
+            Path: /v1/diagnostics/{alertId}
+            Method: get
+        ListRunbooks:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AdminApi
+            Path: /v1/runbooks
+            Method: get
+        GetRunbook:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AdminApi
+            Path: /v1/runbooks/{runbookId}
+            Method: get
+        ExportRunbook:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AdminApi
+            Path: /v1/runbooks/{runbookId}/export
+            Method: get
+
+  TriggerRemediationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: app-b9dac5ac-bc8fbf47-fn-trigger-remediation
+      CodeUri: src/handlers/
+      Handler: trigger_remediation.handler
+      Timeout: 30
+      Environment:
+        Variables:
+          AUDIT_WRITE_FUNCTION_NAME: !Ref AuditWriteFunction
+          NOTIFY_IMS_FUNCTION_NAME: !Ref NotifyImsFunction
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: sts:AssumeRole
+              Resource: !GetAtt TenantScopedRole.Arn
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:app-b9dac5ac-bc8fbf47-tenant-*-integration-creds-*
+            - Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource:
+                - !GetAtt AuditWriteFunction.Arn
+                - !GetAtt NotifyImsFunction.Arn
+      Events:
+        ApproveRunbook:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AdminApi
+            Path: /v1/runbooks/{runbookId}/approve
+            Method: post
+
+  # ---------------------------------------------------------------------
+  # API Gateway - ingestion (public webhook, API key + per-tenant HMAC)
+  # ---------------------------------------------------------------------
+  IngestionApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: app-b9dac5ac-bc8fbf47-ingestion-api
+      StageName: prod
+      TracingEnabled: false
+
+  IngestionApiKey:
+    Type: AWS::ApiGateway::ApiKey
+    DependsOn:
+      - IngestionApiprodStage
+    Properties:
+      Name: app-b9dac5ac-bc8fbf47-ingestion-api-key
+      Enabled: true
+      StageKeys:
+        - RestApiId: !Ref IngestionApi
+          StageName: prod
+
+  IngestionUsagePlan:
+    Type: AWS::ApiGateway::UsagePlan
+    DependsOn:
+      - IngestionApiprodStage
+    Properties:
+      UsagePlanName: app-b9dac5ac-bc8fbf47-ingestion-usage-plan
+      ApiStages:
+        - ApiId: !Ref IngestionApi
+          Stage: prod
+      Throttle:
+        RateLimit: 50
+        BurstLimit: 100
+
+  IngestionUsagePlanKey:
+    Type: AWS::ApiGateway::UsagePlanKey
+    Properties:
+      KeyId: !Ref IngestionApiKey
+      KeyType: API_KEY
+      UsagePlanId: !Ref IngestionUsagePlan
+
+  # ---------------------------------------------------------------------
+  # API Gateway - tenant-facing admin API (custom Lambda REQUEST authorizer)
+  # ---------------------------------------------------------------------
+  AdminApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: app-b9dac5ac-bc8fbf47-admin-api
+      StageName: prod
+      Auth:
+        DefaultAuthorizer: TenantAuthorizer
+        Authorizers:
+          TenantAuthorizer:
+            FunctionArn: !GetAtt AuthorizerFunction.Arn
+            Identity:
+              Headers:
+                - Authorization
+              ReauthorizeEvery: 0
+
+  AuthorizerInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref AuthorizerFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${AdminApi}/*
+
+  # ---------------------------------------------------------------------
+  # EventBridge: alert.received fans out to the diagnosis state machine
+  # and to a durable buffer queue
+  # ---------------------------------------------------------------------
+  AlertReceivedRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: app-b9dac5ac-bc8fbf47-rule-alert-received
+      EventPattern:
+        source:
+          - outagediag.ingestion
+        detail-type:
+          - alert.received
+      Targets:
+        - Id: DiagnosisPipeline
+          Arn: !Ref DiagnosisPipeline
+          RoleArn: !GetAtt EventBridgeStartExecutionRole.Arn
+          InputPath: $.detail
+          RetryPolicy:
+            MaximumRetryAttempts: 3
+        - Id: AlertBuffer
+          Arn: !GetAtt AlertBufferQueue.Arn
+          InputPath: $.detail
+
+  AlertBufferQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref AlertBufferQueue
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt AlertBufferQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !GetAtt AlertReceivedRule.Arn
+
+  EventBridgeStartExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: app-b9dac5ac-bc8fbf47-role-eventbridge-sfn
+      PermissionsBoundary: arn:aws:iam::544635841962:policy/brd-architect-deploy-boundary
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: start-diagnosis-pipeline
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: states:StartExecution
+                Resource: !Ref DiagnosisPipeline
+
+  # ---------------------------------------------------------------------
+  # Step Functions diagnosis pipeline
+  # ---------------------------------------------------------------------
+  StepFunctionsExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: app-b9dac5ac-bc8fbf47-role-sfn-execution
+      PermissionsBoundary: arn:aws:iam::544635841962:policy/brd-architect-deploy-boundary
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: invoke-pipeline-stages
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource:
+                  - !GetAtt CorrelateLogsFunction.Arn
+                  - !GetAtt CorrelateConfigFunction.Arn
+                  - !GetAtt RagContextFunction.Arn
+                  - !GetAtt GenerateRcaFunction.Arn
+                  - !GetAtt GenerateRunbookFunction.Arn
+                  - !GetAtt NotifyFunction.Arn
+              - Effect: Allow
+                Action: sqs:SendMessage
+                Resource: !GetAtt AlertBufferDlq.Arn
+              - Effect: Allow
+                Action: sns:Publish
+                Resource: !Ref OpsAlarmsTopic
+
+  DiagnosisPipeline:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name: app-b9dac5ac-bc8fbf47-sfn-diagnosis-pipeline
+      Type: STANDARD
+      Role: !GetAtt StepFunctionsExecutionRole.Arn
+      Tracing:
+        Enabled: true
+      DefinitionUri: statemachine/diagnosis_pipeline.asl.json
+      DefinitionSubstitutions:
+        CorrelateLogsFunctionArn: !GetAtt CorrelateLogsFunction.Arn
+        CorrelateConfigFunctionArn: !GetAtt CorrelateConfigFunction.Arn
+        RagContextFunctionArn: !GetAtt RagContextFunction.Arn
+        GenerateRcaFunctionArn: !GetAtt GenerateRcaFunction.Arn
+        GenerateRunbookFunctionArn: !GetAtt GenerateRunbookFunction.Arn
+        NotifyFunctionArn: !GetAtt NotifyFunction.Arn
+        AlertBufferDlqUrl: !Ref AlertBufferDlq
+        OpsAlarmsTopicArn: !Ref OpsAlarmsTopic
+
+  # ---------------------------------------------------------------------
+  # SSM feature flag example
+  # ---------------------------------------------------------------------
+  RemediationAutoApproveFlag:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /app-b9dac5ac-bc8fbf47/feature-flags/remediation-auto-approve
+      Type: String
+      Value: 'false'
+
+  # ---------------------------------------------------------------------
+  # CloudWatch alarms (SLA monitoring)
+  # ---------------------------------------------------------------------
+  RunbookSlaAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: app-b9dac5ac-bc8fbf47-alarm-runbook-sla
+      AlarmDescription: Fires when a diagnosis pipeline execution exceeds the 5-minute runbook-delivery SLA.
+      Namespace: AWS/States
+      MetricName: ExecutionTime
+      Dimensions:
+        - Name: StateMachineArn
+          Value: !Ref DiagnosisPipeline
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 300000
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OpsAlarmsTopic
+
+  IngestionSlaAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: app-b9dac5ac-bc8fbf47-alarm-ingestion-sla
+      AlarmDescription: Fires when alert ingestion (webhook to 202 response) exceeds the 1-minute SLA.
+      Namespace: AWS/Lambda
+      MetricName: Duration
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref IngestNormalizeFunction
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 60000
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OpsAlarmsTopic
+
+Outputs:
+  IngestionApiUrl:
+    Value: !Sub https://${IngestionApi}.execute-api.${AWS::Region}.amazonaws.com/prod/v1/alerts
+  AdminApiUrl:
+    Value: !Sub https://${AdminApi}.execute-api.${AWS::Region}.amazonaws.com/prod
+  IngestionApiKeyId:
+    Value: !Ref IngestionApiKey
+  UserPoolId:
+    Value: !Ref UserPool
+  UserPoolClientId:
+    Value: !Ref UserPoolClient
+  RunbooksBucketName:
+    Value: !Ref RunbooksBucket
+  ContextCacheBucketName:
+    Value: !Ref ContextCacheBucket
+  DiagnosisPipelineArn:
+    Value: !Ref DiagnosisPipeline
