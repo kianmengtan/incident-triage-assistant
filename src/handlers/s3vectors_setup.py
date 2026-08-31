@@ -1,9 +1,13 @@
-"""Custom::S3VectorsSetup
+"""S3 Vectors bucket/index setup.
 
-CloudFormation custom-resource Lambda. S3 Vectors is not yet a native
-CloudFormation resource type, so the vector bucket and index are created
-here idempotently via the s3vectors API, mirroring the same
-ensure-exists-then-create pattern used for the ECR repository in deploy.sh.
+S3 Vectors is not a native CloudFormation resource type, and creating the
+vector bucket/index can take far longer than CloudFormation's stack-operation
+timeout allows. So this Lambda is invoked directly (via S3VectorsAsyncSetupFunction,
+triggered by an SNS message published after the stack finishes deploying)
+rather than as a CloudFormation custom resource. It still supports the
+legacy CFN custom-resource event shape (detected by the presence of
+"ResponseURL") for backward compatibility, but that path is no longer wired
+up in template.yaml.
 """
 import boto3
 from botocore.exceptions import ClientError
@@ -55,14 +59,24 @@ def _delete():
 
 
 def handler(event, context):
-    request_type = event.get("RequestType")
-    physical_id = f"{config.VECTOR_BUCKET}/{config.VECTOR_INDEX}"
-    try:
-        if request_type in ("Create", "Update"):
-            _ensure_bucket()
-            _ensure_index()
-        elif request_type == "Delete":
-            _delete()
-        cfnresponse.send(event, context, cfnresponse.SUCCESS, {}, physical_id)
-    except Exception as exc:  # noqa: BLE001 - must always signal CFN, never hang the stack
-        cfnresponse.send(event, context, cfnresponse.FAILED, {"Error": str(exc)}, physical_id)
+    if "ResponseURL" in event:
+        request_type = event.get("RequestType")
+        physical_id = f"{config.VECTOR_BUCKET}/{config.VECTOR_INDEX}"
+        try:
+            if request_type in ("Create", "Update"):
+                _ensure_bucket()
+                _ensure_index()
+            elif request_type == "Delete":
+                _delete()
+            cfnresponse.send(event, context, cfnresponse.SUCCESS, {}, physical_id)
+        except Exception as exc:  # noqa: BLE001 - must always signal CFN, never hang the stack
+            cfnresponse.send(event, context, cfnresponse.FAILED, {"Error": str(exc)}, physical_id)
+        return None
+
+    action = event.get("action", "create")
+    if action == "delete":
+        _delete()
+    else:
+        _ensure_bucket()
+        _ensure_index()
+    return {"vectorBucket": config.VECTOR_BUCKET, "vectorIndex": config.VECTOR_INDEX, "action": action}

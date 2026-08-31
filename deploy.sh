@@ -47,4 +47,25 @@ with open("outputs.json", "w") as fh:
 print(json.dumps(flat, indent=2))
 PY
 
+echo "==> Triggering async S3 Vectors setup (does not block this deploy)"
+S3VECTORS_TOPIC_ARN=$(python3 - "$OUTPUTS_JSON" <<'PY'
+import json
+import sys
+
+outputs = json.loads(sys.argv[1] or "[]")
+flat = {o["OutputKey"]: o["OutputValue"] for o in outputs}
+print(flat.get("S3VectorsSetupTopicArn", ""))
+PY
+)
+
+if [ -n "${S3VECTORS_TOPIC_ARN}" ]; then
+  aws sns publish \
+    --topic-arn "${S3VECTORS_TOPIC_ARN}" \
+    --message '{"action":"create"}' \
+    --region "${REGION}" >/dev/null
+  echo "==> S3 Vectors setup started asynchronously, check CloudWatch logs for progress"
+else
+  echo "WARNING: S3VectorsSetupTopicArn missing from stack outputs; skipped async S3 Vectors trigger" >&2
+fi
+
 echo "==> Deploy complete. Outputs written to outputs.json"

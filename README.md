@@ -50,11 +50,11 @@ encryption key stored in Secrets Manager.
   - API Gateway: a public, API-key-gated ingestion API (`POST /v1/alerts`)
     and an admin API behind a custom Lambda authorizer backed by Cognito
     (diagnostics/runbook read endpoints + remediation approval).
-  - Lambda: 14 functions (ingestion/normalization, log correlation, config
+  - Lambda: 15 functions (ingestion/normalization, log correlation, config
     correlation, RAG context retrieval, RCA/remediation generation, runbook
     generation, notifications, audit recording, tenant provisioning, the
     admin authorizer, diagnostics/runbook queries, remediation approval, and
-    an S3 Vectors setup custom resource), all Python 3.13, sharing one
+    the S3 Vectors setup pair described below), all Python 3.13, sharing one
     Lambda Layer (`common/`) for config, tenant-scoped AWS clients,
     encryption, Bedrock calls, and audit helpers.
   - Step Functions: `diagnosis_pipeline.asl.json` orchestrates correlation →
@@ -63,10 +63,23 @@ encryption key stored in Secrets Manager.
   - DynamoDB: Tenants, Alerts, Diagnostics, Runbooks, and AuditTrail tables,
     all partitioned by `tenant_id` with a 6-month TTL on audit records.
   - S3: context-cache, runbooks, and audit-export buckets, plus an
-    `app-b9dac5ac-bc8fbf47-vectors` S3 Vectors bucket/index (provisioned via
-    a custom resource, since S3 Vectors has no native CloudFormation type).
-  - EventBridge, SQS, SNS: alert event bus with a buffering queue + DLQ, and
-    an SNS topic for runbook-ready notifications.
+    `app-b9dac5ac-bc8fbf47-vectors` S3 Vectors bucket/index. S3 Vectors has no
+    native CloudFormation resource type, and bucket/index creation can run
+    long enough to blow past CloudFormation's stack-operation timeout — so
+    it is never provisioned as a CFN custom resource. Instead:
+    `S3VectorsSetupFunction` does the actual `s3vectors` API calls
+    (idempotent create/get, same pattern as `deploy.sh`'s ECR handling), and
+    `S3VectorsAsyncSetupFunction` invokes it in response to a message on the
+    `S3VectorsSetupTopic` SNS topic. `deploy.sh` publishes that message after
+    `sam deploy` returns, so the stack finishes in minutes regardless of how
+    long the vector bucket/index takes; RAG handlers that read/write vectors
+    work once that background setup completes. `destroy.sh` invokes
+    `S3VectorsSetupFunction` directly with a delete action before tearing
+    down the stack, since CloudFormation no longer owns that resource's
+    lifecycle either.
+  - EventBridge, SQS, SNS: alert event bus with a buffering queue + DLQ, an
+    SNS topic for runbook-ready notifications, and the `S3VectorsSetupTopic`
+    described above.
   - Cognito: a user pool with a `tenant_id` custom attribute, self-signup,
     `TenantAdmin`/`TenantEngineer` groups, and a `PostConfirmation` trigger
     that provisions the tenant's DynamoDB row and per-tenant secrets.
@@ -83,12 +96,17 @@ encryption key stored in Secrets Manager.
   definition.
 - **`tests/`** — pytest unit tests (mocking all AWS calls) covering
   ingestion dedup/HMAC validation, tenant-scoped query enforcement,
-  admin-approval authorization, and audit recording; run with
-  `pytest tests/ -q` (18 tests, all passing).
+  admin-approval authorization, audit recording, and the S3 Vectors
+  setup/async-trigger handlers; run with `pytest tests/ -q` (25 tests, all
+  passing).
 - **`deploy.sh`** / **`destroy.sh`** — idempotent build/deploy and teardown
   scripts using `sam build`/`sam deploy` against a self-managed artifacts
   bucket (`app-b9dac5ac-bc8fbf47-artifacts`), writing `outputs.json`
-  (including `app_url`, the admin API's base URL) on success.
+  (including `app_url`, the admin API's base URL) on success. `deploy.sh`
+  also publishes to `S3VectorsSetupTopic` after a successful deploy to kick
+  off vector bucket/index creation asynchronously (see above); it does not
+  wait for that to finish — check the `S3VectorsAsyncSetupFunction` and
+  `S3VectorsSetupFunction` CloudWatch log groups for progress/failures.
 
 ## Bedrock models used
 

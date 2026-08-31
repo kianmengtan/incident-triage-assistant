@@ -213,7 +213,7 @@ Resources:
       FunctionName: app-b9dac5ac-bc8fbf47-fn-s3vectors-setup
       CodeUri: src/handlers/
       Handler: s3vectors_setup.handler
-      Timeout: 60
+      Timeout: 300
       Policies:
         - Statement:
             - Effect: Allow
@@ -226,10 +226,35 @@ Resources:
                 - s3vectors:DeleteIndex
               Resource: '*'
 
-  S3VectorsSetup:
-    Type: Custom::S3VectorsSetup
+  # S3 Vectors bucket/index creation can outlast CloudFormation's stack
+  # operation timeout, so it is never invoked as a CFN custom resource.
+  # Instead deploy.sh publishes to S3VectorsSetupTopic once the stack is
+  # live, and S3VectorsAsyncSetupFunction runs the setup out-of-band.
+  S3VectorsSetupTopic:
+    Type: AWS::SNS::Topic
     Properties:
-      ServiceToken: !GetAtt S3VectorsSetupFunction.Arn
+      TopicName: app-b9dac5ac-bc8fbf47-topic-s3vectors-setup
+
+  S3VectorsAsyncSetupFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: app-b9dac5ac-bc8fbf47-fn-s3vectors-async-setup
+      CodeUri: src/handlers/
+      Handler: s3vectors_async_setup.handler
+      Timeout: 300
+      Environment:
+        Variables:
+          S3VECTORS_SETUP_FUNCTION_NAME: !Ref S3VectorsSetupFunction
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource: !GetAtt S3VectorsSetupFunction.Arn
+      Events:
+        SetupTrigger:
+          Type: SNS
+          Properties:
+            Topic: !Ref S3VectorsSetupTopic
 
   # ---------------------------------------------------------------------
   # SQS buffer queue + DLQ
@@ -886,3 +911,5 @@ Outputs:
     Value: !Ref ContextCacheBucket
   DiagnosisPipelineArn:
     Value: !Ref DiagnosisPipeline
+  S3VectorsSetupTopicArn:
+    Value: !Ref S3VectorsSetupTopic
