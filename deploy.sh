@@ -8,6 +8,33 @@ ARTIFACTS_BUCKET="${TEMPLATE_BUCKET:-${PREFIX}-artifacts}"
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
+echo "==> Checking for an existing ${STACK_NAME} stack in a failed/rollback state"
+STACK_STATUS=$(aws cloudformation describe-stacks \
+  --stack-name "${STACK_NAME}" \
+  --region "${REGION}" \
+  --query 'Stacks[0].StackStatus' \
+  --output text 2>/dev/null || echo "STACK_NOT_FOUND")
+
+case "${STACK_STATUS}" in
+  CREATE_FAILED|ROLLBACK_COMPLETE|ROLLBACK_IN_PROGRESS|UPDATE_FAILED|UPDATE_ROLLBACK_COMPLETE|UPDATE_ROLLBACK_IN_PROGRESS)
+    echo "==> Stack ${STACK_NAME} is in ${STACK_STATUS}; deleting it before redeploying"
+    aws cloudformation delete-stack --stack-name "${STACK_NAME}" --region "${REGION}"
+    if ! timeout 300 aws cloudformation wait stack-delete-complete \
+      --stack-name "${STACK_NAME}" \
+      --region "${REGION}"; then
+      echo "ERROR: Timed out waiting for stack ${STACK_NAME} to finish deleting" >&2
+      exit 1
+    fi
+    echo "==> Stack ${STACK_NAME} deleted"
+    ;;
+  STACK_NOT_FOUND)
+    echo "==> No existing ${STACK_NAME} stack found; proceeding"
+    ;;
+  *)
+    echo "==> Stack ${STACK_NAME} exists in state ${STACK_STATUS}; proceeding with update"
+    ;;
+esac
+
 echo "==> Ensuring artifacts bucket ${ARTIFACTS_BUCKET} exists in ${REGION}"
 if ! aws s3api head-bucket --bucket "${ARTIFACTS_BUCKET}" --region "${REGION}" 2>/dev/null; then
   aws s3api create-bucket \
