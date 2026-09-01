@@ -203,3 +203,25 @@ test('the favicon is inlined, not a separate file request', () => {
   /* Reuses the palette rather than introducing a colour. */
   assert.match(icon[0], /%23A6482B/, 'the mark should use the accent token value');
 });
+
+test('the product name and mark are present and consistent', () => {
+  /* A rename that lands in the title but not the masthead, or vice versa, is the
+   * failure mode here -- the brand appears in four separate places. */
+  assert.match(app, /<title>Arcadia — /);
+  assert.equal(
+    [...app.matchAll(/A<span>rca<\/span>dia/g)].length, 2,
+    'the wordmark should appear in both the auth screen and the masthead'
+  );
+  /* The accent-coloured span is what surfaces the acronym hidden in the word. */
+  assert.match(app, /\.brand-mark span, \.masthead-brand span \{ color: var\(--color-accent\)/);
+});
+
+test('the logo is inline SVG drawn from tokens, not an image request', () => {
+  const marks = [...app.matchAll(/<svg class="logo"[\s\S]*?<\/svg>/g)];
+  assert.equal(marks.length, 2, 'the mark should appear beside both wordmarks');
+  for (const [mark] of marks) {
+    assert.match(mark, /var\(--color-accent\)/, 'the arch uses the accent token');
+    assert.match(mark, /var\(--color-secondary\)/, 'the keystone uses the secondary token');
+    assert.match(mark, /aria-hidden="true"/, 'decorative beside the wordmark, so hidden from AT');
+  }
+});

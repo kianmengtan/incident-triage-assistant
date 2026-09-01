@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Triage — incident console</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23A6482B'/%3E%3Cpath d='M16 6L25 16L16 26L7 16Z' fill='%23FBF7F1'/%3E%3C/svg%3E">
+<title>Arcadia — automated root cause analysis</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23A6482B'/%3E%3Cpath d='M9.5 25V16.5a6.5 6.5 0 0 1 13 0V25' fill='none' stroke='%23FBF7F1' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
 <style>
 /* ============================================================
    Tokens lifted verbatim from design/reference.html :root.
@@ -180,6 +180,12 @@ textarea.input { min-height: 96px; resize: vertical; line-height: var(--leading-
 .brand { display: flex; align-items: baseline; gap: var(--space-2); margin-bottom: var(--space-1); }
 .brand-mark { font-family: var(--font-display); font-size: var(--text-xl); }
 .brand-sub { color: var(--color-ink-muted); font-size: var(--text-sm); }
+/* An arch is held by its keystone: the one piece that, once found, holds
+   everything up. The mark is that, and it opens with the arc the name does. */
+.logo { flex: none; }
+.brand .logo { align-self: center; }
+/* Surfaces the acronym the name is hiding: A(rca)dia. */
+.brand-mark span, .masthead-brand span { color: var(--color-accent); }
 .tabs { display: flex; gap: var(--space-1); margin: var(--space-4) 0; border-bottom: 1px solid var(--color-border); }
 .tab {
   font: inherit; font-weight: 640; cursor: pointer;
@@ -297,8 +303,9 @@ code {
 <div class="auth-wrap" id="authView">
   <div class="auth-card">
     <div class="brand">
-      <span class="brand-mark">Triage</span>
-      <span class="brand-sub">incident diagnosis console</span>
+      <svg class="logo" viewBox="0 0 32 32" width="26" height="26" aria-hidden="true" focusable="false"><path d="M7.5 27V16a8.5 8.5 0 0 1 17 0v11" fill="none" stroke="var(--color-accent)" stroke-width="3" stroke-linecap="round"/><circle cx="16" cy="7.5" r="2.7" fill="var(--color-secondary)"/></svg>
+      <span class="brand-mark">A<span>rca</span>dia</span>
+      <span class="brand-sub">automated root cause analysis</span>
     </div>
     <p class="meta">Sign in with your work email. Your organisation is determined by your email domain.</p>
 
@@ -351,7 +358,7 @@ code {
 <!-- ============================ app ============================ -->
 <div id="appView" hidden>
   <header class="masthead">
-    <span class="masthead-brand">Triage</span>
+    <svg class="logo" viewBox="0 0 32 32" width="26" height="26" aria-hidden="true" focusable="false"><path d="M7.5 27V16a8.5 8.5 0 0 1 17 0v11" fill="none" stroke="var(--color-accent)" stroke-width="3" stroke-linecap="round"/><circle cx="16" cy="7.5" r="2.7" fill="var(--color-secondary)"/></svg><span class="masthead-brand">A<span>rca</span>dia</span>
     <span class="badge badge-neutral" id="tenantChip"></span>
     <span class="spacer"></span>
     <span class="meta" id="whoami"></span>
@@ -927,7 +934,7 @@ function median(values) {
    ============================================================ */
 var CONFIG = null;
 var session = null;   /* { idToken, refreshToken, email, tenantId, role, expMs } */
-var STORE_KEY = 'triage.session';
+var STORE_KEY = 'arcadia.session';
 
 var $ = function (id) { return document.getElementById(id); };
 

@@ -1,4 +1,4 @@
-# Triage — the incident console
+# Arcadia — the incident console
 
 Two pages live here, and they are for different things.
 
