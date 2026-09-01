@@ -340,12 +340,12 @@ Resources:
   RunbookReadyTopic:
     Type: AWS::SNS::Topic
     Properties:
-      TopicName: app-b9dac5ac-bc8fbf47-topic-runbook-ready
+      TopicName: !Sub app-b9dac5ac-bc8fbf47-topic-runbook-ready-${AWS::StackName}
 
   OpsAlarmsTopic:
     Type: AWS::SNS::Topic
     Properties:
-      TopicName: app-b9dac5ac-bc8fbf47-topic-ops-alarms
+      TopicName: !Sub app-b9dac5ac-bc8fbf47-topic-ops-alarms-${AWS::StackName}
 
   # ---------------------------------------------------------------------
   # Cognito
