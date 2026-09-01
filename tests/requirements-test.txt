@@ -1,3 +1,9 @@
 pytest>=8.0.0
 boto3>=1.35.99
 cryptography>=42.0.0
+# Runs the real SAM transform in tests/test_template_contract.py, so the
+# handlers can be asserted against the stack CloudFormation actually receives.
+# cfn-lint does not transform the template without it, which is why a clean lint
+# said nothing about the circular dependency that blocked every deploy.
+aws-sam-translator>=1.89.0
+cfn-lint>=1.22.0

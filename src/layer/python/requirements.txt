@@ -1,0 +1,6 @@
+# Floor verified to carry the s3vectors service model. The previous floor
+# (1.35.99) predates S3 Vectors, so a constrained resolve could install a boto3
+# whose client factory has never heard of it — which fails at import, and in the
+# custom resource that meant a deploy stalling with no callback.
+boto3>=1.40.0
+cryptography>=42.0.0

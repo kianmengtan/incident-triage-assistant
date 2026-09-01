@@ -9,53 +9,96 @@ legacy CFN custom-resource event shape (detected by the presence of
 "ResponseURL") for backward compatibility, but that path is no longer wired
 up in template.yaml.
 """
-import boto3
-from botocore.exceptions import ClientError
-import cfnresponse  # provided by the Lambda custom-resource runtime helper layer
+import logging
+
+import cfnresponse
 
 from common import config
 
-_s3vectors = boto3.client("s3vectors", region_name=config.REGION)
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
 
 DIMENSION = 1024  # cohere.embed-multilingual-v3 output dimension
 DISTANCE_METRIC = "cosine"
 
+# Error codes meaning "it isn't there", which is the normal case on a first
+# deploy and not a failure.
+_NOT_FOUND = ("NotFoundException", "ResourceNotFoundException")
 
-def _ensure_bucket():
+
+def _client():
+    """Build the s3vectors client here, not at import.
+
+    boto3 is imported inside the function too: if the layer resolved a botocore
+    without the s3vectors service model, both the import and the client
+    construction have to fail somewhere the handler can catch them.
+    """
+    import boto3
+
+    return boto3.client("s3vectors", region_name=config.REGION)
+
+
+def _not_found(exc):
+    return exc.response["Error"]["Code"] in _NOT_FOUND
+
+
+def _ensure_bucket(s3vectors):
+    from botocore.exceptions import ClientError
+
     try:
-        _s3vectors.get_vector_bucket(vectorBucketName=config.VECTOR_BUCKET)
+        s3vectors.get_vector_bucket(vectorBucketName=config.VECTOR_BUCKET)
+        logger.info("vector bucket %s already exists", config.VECTOR_BUCKET)
     except ClientError as exc:
-        if exc.response["Error"]["Code"] not in ("NotFoundException", "ResourceNotFoundException"):
+        if not _not_found(exc):
             raise
-        _s3vectors.create_vector_bucket(vectorBucketName=config.VECTOR_BUCKET)
+        s3vectors.create_vector_bucket(vectorBucketName=config.VECTOR_BUCKET)
+        logger.info("created vector bucket %s", config.VECTOR_BUCKET)
 
 
-def _ensure_index():
+def _ensure_index(s3vectors):
+    from botocore.exceptions import ClientError
+
     try:
-        _s3vectors.get_index(
+        s3vectors.get_index(
             vectorBucketName=config.VECTOR_BUCKET, indexName=config.VECTOR_INDEX
         )
+        logger.info("vector index %s already exists", config.VECTOR_INDEX)
     except ClientError as exc:
-        if exc.response["Error"]["Code"] not in ("NotFoundException", "ResourceNotFoundException"):
+        if not _not_found(exc):
             raise
-        _s3vectors.create_index(
+        s3vectors.create_index(
             vectorBucketName=config.VECTOR_BUCKET,
             indexName=config.VECTOR_INDEX,
             dimension=DIMENSION,
             distanceMetric=DISTANCE_METRIC,
             dataType="float32",
         )
+        logger.info(
+            "created vector index %s (dim=%s, metric=%s)",
+            config.VECTOR_INDEX,
+            DIMENSION,
+            DISTANCE_METRIC,
+        )
 
 
-def _delete():
+def _delete(s3vectors):
+    """Tear the index and bucket down, loudly enough to notice a leftover."""
+    from botocore.exceptions import ClientError
+
     try:
-        _s3vectors.delete_index(vectorBucketName=config.VECTOR_BUCKET, indexName=config.VECTOR_INDEX)
-    except ClientError:
-        pass
+        s3vectors.delete_index(
+            vectorBucketName=config.VECTOR_BUCKET, indexName=config.VECTOR_INDEX
+        )
+    except ClientError as exc:
+        logger.warning("could not delete vector index: %s", exc)
     try:
-        _s3vectors.delete_vector_bucket(vectorBucketName=config.VECTOR_BUCKET)
-    except ClientError:
-        pass
+        s3vectors.delete_vector_bucket(vectorBucketName=config.VECTOR_BUCKET)
+    except ClientError as exc:
+        logger.error(
+            "vector bucket %s was not deleted and will be left behind: %s",
+            config.VECTOR_BUCKET,
+            exc,
+        )
 
 
 def handler(event, context):

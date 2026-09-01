@@ -1,6 +1,7 @@
 {
-  "Comment": "Alert diagnosis pipeline: correlate -> RAG -> RCA -> runbook -> notify",
+  "Comment": "Alert diagnosis pipeline: correlate -> RAG -> RCA -> runbook -> notify. TimeoutSeconds enforces NFR-01's five-minute budget rather than only alarming on it after the fact. Per-attempt timeouts are sized so the expected path (one attempt per stage, ~195s) finishes well inside the budget; a path that retries every stage deliberately breaches it, because the alternative is per-attempt timeouts so short that a normally-slow Bedrock call fails routinely. An execution-level timeout cannot be caught by any Catch here, so it is recorded from outside instead -- see the ExecutionTimedOutRule in template.yaml, which marks the alert failed for a TIMED_OUT or ABORTED execution.",
   "StartAt": "CorrelateContext",
+  "TimeoutSeconds": 300,
   "States": {
     "CorrelateContext": {
       "Type": "Parallel",
@@ -11,11 +12,19 @@
             "CorrelateLogs": {
               "Type": "Task",
               "Resource": "${CorrelateLogsFunctionArn}",
+              "Comment": "65s, not 95: NFR-05 gives correlation a 60s target, so an attempt still running past that has already missed it and a longer timeout only spends the pipeline's budget.",
+              "TimeoutSeconds": 65,
               "Retry": [
                 {
-                  "ErrorEquals": ["States.ALL"],
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException",
+                    "Lambda.TooManyRequestsException",
+                    "States.Timeout"
+                  ],
                   "IntervalSeconds": 2,
-                  "MaxAttempts": 3,
+                  "MaxAttempts": 1,
                   "BackoffRate": 2.0
                 }
               ],
@@ -29,11 +38,18 @@
             "CorrelateConfig": {
               "Type": "Task",
               "Resource": "${CorrelateConfigFunctionArn}",
+              "TimeoutSeconds": 65,
               "Retry": [
                 {
-                  "ErrorEquals": ["States.ALL"],
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException",
+                    "Lambda.TooManyRequestsException",
+                    "States.Timeout"
+                  ],
                   "IntervalSeconds": 2,
-                  "MaxAttempts": 3,
+                  "MaxAttempts": 1,
                   "BackoffRate": 2.0
                 }
               ],
@@ -49,9 +65,11 @@
       "ResultPath": "$.correlation",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.error",
-          "Next": "HandleFailure"
+          "Next": "MarkAlertFailed"
         }
       ],
       "Next": "MergeCorrelation"
@@ -72,19 +90,29 @@
       "Type": "Task",
       "Resource": "${RagContextFunctionArn}",
       "ResultPath": "$.rag_context",
+      "TimeoutSeconds": 25,
       "Retry": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException",
+            "ThrottlingException",
+            "States.Timeout"
+          ],
           "IntervalSeconds": 2,
-          "MaxAttempts": 3,
+          "MaxAttempts": 1,
           "BackoffRate": 2.0
         }
       ],
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.error",
-          "Next": "HandleFailure"
+          "Next": "MarkAlertFailed"
         }
       ],
       "Next": "GenerateRca"
@@ -93,19 +121,39 @@
       "Type": "Task",
       "Resource": "${GenerateRcaFunctionArn}",
       "ResultPath": "$.diagnostic",
+      "TimeoutSeconds": 45,
       "Retry": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException",
+            "ThrottlingException",
+            "States.Timeout"
+          ],
           "IntervalSeconds": 2,
-          "MaxAttempts": 3,
+          "MaxAttempts": 1,
           "BackoffRate": 2.0
+        },
+        {
+          "Comment": "A model that answered with prose or ran out of tokens usually succeeds on a second ask, and one retry is all the budget allows.",
+          "ErrorEquals": [
+            "InvalidModelJson",
+            "TruncatedResponse"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 1,
+          "BackoffRate": 1.0
         }
       ],
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.error",
-          "Next": "HandleFailure"
+          "Next": "MarkAlertFailed"
         }
       ],
       "Next": "GenerateRunbook"
@@ -114,19 +162,37 @@
       "Type": "Task",
       "Resource": "${GenerateRunbookFunctionArn}",
       "ResultPath": "$.runbook",
+      "TimeoutSeconds": 45,
       "Retry": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException",
+            "ThrottlingException",
+            "States.Timeout"
+          ],
           "IntervalSeconds": 2,
-          "MaxAttempts": 3,
+          "MaxAttempts": 1,
           "BackoffRate": 2.0
+        },
+        {
+          "ErrorEquals": [
+            "TruncatedResponse"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 1,
+          "BackoffRate": 1.0
         }
       ],
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.error",
-          "Next": "HandleFailure"
+          "Next": "MarkAlertFailed"
         }
       ],
       "Next": "NotifyRunbookReady"
@@ -135,40 +201,68 @@
       "Type": "Task",
       "Resource": "${NotifyFunctionArn}",
       "ResultPath": "$.notification",
+      "TimeoutSeconds": 15,
       "Retry": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException",
+            "States.Timeout"
+          ],
           "IntervalSeconds": 2,
-          "MaxAttempts": 3,
+          "MaxAttempts": 1,
           "BackoffRate": 2.0
         }
       ],
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.error",
-          "Next": "HandleFailure"
+          "Next": "MarkAlertFailed"
         }
       ],
       "End": true
     },
-    "HandleFailure": {
+    "MarkAlertFailed": {
+      "Comment": "Writes pipeline_stage=failed on the alert row, which is the only thing that lets the console distinguish a failed diagnosis from one still running. First on the failure path, and its own failure must not swallow the original error: the Catch discards this state's error and carries $ on to the DLQ unchanged.",
+      "Type": "Task",
+      "Resource": "${MarkPipelineFailedFunctionArn}",
+      "ResultPath": null,
+      "TimeoutSeconds": 15,
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": null,
+          "Next": "SendToFailureDlq"
+        }
+      ],
+      "Next": "SendToFailureDlq"
+    },
+    "SendToFailureDlq": {
+      "Comment": "The pipeline's own DLQ, not the ingestion buffer's. The two carried different message shapes on one queue, which made redrive impossible because a consumer could not know which it was holding. The full state is kept so a redrive can resume with the context already gathered.",
       "Type": "Task",
       "Resource": "arn:aws:states:::sqs:sendMessage",
       "Parameters": {
-        "QueueUrl": "${AlertBufferDlqUrl}",
+        "QueueUrl": "${PipelineFailureDlqUrl}",
         "MessageBody.$": "States.JsonToString($)"
       },
       "ResultPath": null,
       "Next": "NotifyOpsFailure"
     },
     "NotifyOpsFailure": {
+      "Comment": "Identifiers only. The ops topic is shared across tenants and is not encrypted, so publishing the whole state put plaintext RCA text and alert descriptions into it -- undoing the per-tenant encryption two states earlier.",
       "Type": "Task",
       "Resource": "arn:aws:states:::sns:publish",
       "Parameters": {
         "TopicArn": "${OpsAlarmsTopicArn}",
         "Subject": "Diagnosis pipeline failure",
-        "Message.$": "States.JsonToString($)"
+        "Message.$": "States.Format('Diagnosis pipeline failed. tenant={} alert={} error={} execution={}', $.tenant_id, $.alert_id, $.error.Error, $$.Execution.Id)"
       },
       "ResultPath": null,
       "Next": "PipelineFailed"
