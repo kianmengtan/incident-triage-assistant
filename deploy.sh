@@ -12,6 +12,14 @@ REGION="ap-southeast-1"
 STACK_NAME="${STACK_NAME:-${PREFIX}-triage}"
 ARTIFACTS_BUCKET="${TEMPLATE_BUCKET:-${PREFIX}-artifacts}"
 
+# Parses the stack outputs below. This is expanded four times and used to be
+# assigned nowhere: under `set -u` that aborted the script at the first use,
+# which sits immediately AFTER sam deploy has already succeeded. The stack came
+# out complete and serving while the console upload and outputs.json -- both
+# later in this file -- never ran, so app_url pointed at an empty bucket and
+# every request returned an opaque S3 403.
+PYTHON="${PYTHON:-python3}"
+
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 echo "==> Deploying stack: ${STACK_NAME}"
@@ -106,23 +114,44 @@ flat = {o["OutputKey"]: o["OutputValue"] for o in outputs}
 print(flat.get("ConsoleDistributionId", ""))
 ')
 
-if [[ -n "${CONSOLE_BUCKET}" ]]; then
-  echo "==> Publishing console to s3://${CONSOLE_BUCKET}"
-  # Keep lib/ and the sync script out of it: only the page is served.
-  aws s3 cp frontend/prototype.html "s3://${CONSOLE_BUCKET}/index.html" \
-    --content-type "text/html; charset=utf-8" \
-    --cache-control "no-cache" \
-    --region "${REGION}"
+# The console is not optional: app_url IS the CloudFront domain in front of this
+# bucket, so a deploy that cannot publish the page has not succeeded. This block
+# used to be wrapped in `if [[ -n "${CONSOLE_BUCKET}" ]]`, which SKIPPED the whole
+# publish whenever the output could not be read -- the deploy then exited 0 having
+# shipped an empty bucket, and every request to app_url came back as an opaque S3
+# 403 (AccessDenied rather than 404, because the OAC grant is s3:GetObject with no
+# s3:ListBucket). Missing outputs are now a hard failure.
+if [[ -z "${CONSOLE_BUCKET}" ]]; then
+  echo "ERROR: ConsoleBucketName is missing from the ${STACK_NAME} stack outputs." >&2
+  echo "       The console cannot be published, and app_url would serve a 403." >&2
+  exit 1
+fi
+if [[ -z "${DISTRIBUTION_ID}" ]]; then
+  echo "ERROR: ConsoleDistributionId is missing from the ${STACK_NAME} stack outputs." >&2
+  echo "       Refusing to publish a console whose cache cannot be invalidated." >&2
+  exit 1
+fi
+if [[ ! -f frontend/prototype.html ]]; then
+  echo "ERROR: frontend/prototype.html is missing; there is no console page to publish." >&2
+  exit 1
+fi
 
-  # The deployed API and Cognito identifiers, for wiring the console to live
-  # data. The page ships with mock data and reads no config today, so this is
-  # published for the next step rather than consumed by it.
-  # Written to a temp dir, never the repo root. The platform runs `git add -A`
-  # after every change, so a deploy that died between writing this file and
-  # removing it would commit the deployment's identifiers.
-  CONFIG_DIR=$(mktemp -d)
-  trap 'rm -rf "${CONFIG_DIR}"' EXIT
-  printf '%s' "${OUTPUTS_JSON}" | "${PYTHON}" -c '
+echo "==> Publishing console to s3://${CONSOLE_BUCKET}"
+# Keep lib/ and the sync script out of it: only the page is served.
+aws s3 cp frontend/prototype.html "s3://${CONSOLE_BUCKET}/index.html" \
+  --content-type "text/html; charset=utf-8" \
+  --cache-control "no-cache" \
+  --region "${REGION}"
+
+# The deployed API and Cognito identifiers, for wiring the console to live
+# data. The page ships with mock data and reads no config today, so this is
+# published for the next step rather than consumed by it.
+# Written to a temp dir, never the repo root. The platform runs `git add -A`
+# after every change, so a deploy that died between writing this file and
+# removing it would commit the deployment's identifiers.
+CONFIG_DIR=$(mktemp -d)
+trap 'rm -rf "${CONFIG_DIR}"' EXIT
+printf '%s' "${OUTPUTS_JSON}" | "${PYTHON}" -c '
 import json, sys
 outputs = json.load(sys.stdin) or []
 flat = {o["OutputKey"]: o["OutputValue"] for o in outputs}
@@ -137,19 +166,25 @@ json.dump(
     indent=2,
 )
 ' "${CONFIG_DIR}/config.json"
-  aws s3 cp "${CONFIG_DIR}/config.json" "s3://${CONSOLE_BUCKET}/config.json" \
-    --content-type "application/json" \
-    --cache-control "no-cache" \
-    --region "${REGION}"
+aws s3 cp "${CONFIG_DIR}/config.json" "s3://${CONSOLE_BUCKET}/config.json" \
+  --content-type "application/json" \
+  --cache-control "no-cache" \
+  --region "${REGION}"
 
-  if [[ -n "${DISTRIBUTION_ID}" ]]; then
-    echo "==> Invalidating CloudFront cache"
-    aws cloudfront create-invalidation \
-      --distribution-id "${DISTRIBUTION_ID}" \
-      --paths "/*" \
-      --query 'Invalidation.Id' --output text >/dev/null
-  fi
-fi
+# Read the object back. An upload that failed without a non-zero exit would
+# otherwise pass for a successful publish, which is the exact failure this
+# section is here to prevent.
+echo "==> Verifying the console object is readable"
+aws s3api head-object \
+  --bucket "${CONSOLE_BUCKET}" \
+  --key index.html \
+  --region "${REGION}" >/dev/null
+
+echo "==> Invalidating CloudFront cache"
+aws cloudfront create-invalidation \
+  --distribution-id "${DISTRIBUTION_ID}" \
+  --paths "/*" \
+  --query 'Invalidation.Id' --output text >/dev/null
 
 echo "==> Writing outputs.json"
 printf '%s' "${OUTPUTS_JSON}" | "${PYTHON}" - <<'PY'
