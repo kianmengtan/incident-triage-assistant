@@ -4,23 +4,21 @@ Description: >
   Incident Triage Assistant - automated outage diagnosis and remediation
   (alert ingestion -> log/config correlation -> RAG -> Bedrock RCA -> runbook
   -> gated remediation), multi-tenant. Every physical name is derived from the
-  NamePrefix parameter, so a redeploy never collides with a previous run's
+  NamePrefix parameter, so deploys stay idempotent to the same fixed set of
   resources.
 
 Parameters:
-  # Every physical resource name in this stack is built from this one value, so a
-  # fresh set of resources is a change to the run token at the end of it (v2 ->
-  # v3) and nothing else. The platform contract fixes the part before the token --
-  # resources named outside that prefix are never cleaned up -- and the token
-  # itself is what keeps this deploy off the last one's tables, buckets and
-  # secrets. deploy.sh and destroy.sh pass it in from their shared RUN_ID.
+  # Every physical resource name in this stack is built from this one value.
+  # Fixed to the platform contract's prefix -- resources named outside it are
+  # never cleaned up -- so redeploys are idempotent to the same stack instead
+  # of minting a new set of names each time. deploy.sh and destroy.sh pass it
+  # in from their shared PREFIX.
   NamePrefix:
     Type: String
-    Default: app-b9dac5ac-bc8fbf47-v2
-    AllowedPattern: '^app-b9dac5ac-bc8fbf47-[a-z0-9]+$'
+    Default: app-b9dac5ac-bc8fbf47
+    AllowedPattern: '^app-b9dac5ac-bc8fbf47$'
     ConstraintDescription: >
-      must be the contract prefix followed by a lowercase alphanumeric run token,
-      e.g. app-b9dac5ac-bc8fbf47-v2
+      must be exactly the contract prefix, app-b9dac5ac-bc8fbf47
 
 Globals:
   Function:

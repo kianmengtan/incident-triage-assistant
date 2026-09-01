@@ -170,34 +170,29 @@ per-tenant secrets — is derived from a single CloudFormation parameter:
 Parameters:
   NamePrefix:
     Type: String
-    Default: app-b9dac5ac-bc8fbf47-v2
+    Default: app-b9dac5ac-bc8fbf47
 ```
 
-The `app-b9dac5ac-bc8fbf47-` part is fixed by the platform contract: anything
-named outside it is never cleaned up. That prefix is therefore shared by *every*
-deploy of this project, which makes it useless for telling two of them apart —
-so the run token after it (`v2`) is what does. `deploy.sh` and `destroy.sh` build
-it from one `RUN_ID`:
+`app-b9dac5ac-bc8fbf47` is fixed by the platform contract: anything named
+outside it is never cleaned up. It is also kept fixed with no per-run token,
+so every deploy lands on the exact same set of names — that's what makes
+`./deploy.sh` idempotent to the same stack instead of minting a new one each
+run, keeps S3 bucket names comfortably under their 63-character limit, and
+lets `./destroy.sh` find exactly what `./deploy.sh` created without having to
+be told which run to tear down. `deploy.sh` and `destroy.sh` build every name
+off one `PREFIX`:
 
 ```bash
-RUN_ID="${RUN_ID:-v2}"
-NAME_PREFIX="${NAME_PREFIX:-app-b9dac5ac-bc8fbf47-${RUN_ID}}"
+PREFIX="${PREFIX:-app-b9dac5ac-bc8fbf47}"
+STACK_NAME="${STACK_NAME:-${PREFIX}-triage}"
 ```
-
-**To get a clean set of resources that cannot collide with an earlier run,** bump
-the token in three places that a test then holds together: the `NamePrefix`
-default in `template.yaml`, `RUN_ID` in `deploy.sh` and `destroy.sh`, and the
-fallback in `src/layer/python/common/config.py`. Or override it for one run
-without editing anything: `RUN_ID=v3 ./deploy.sh` (and the same `RUN_ID` when
-you later destroy it — a teardown pointed at a different token deletes nothing
-and still reports success).
 
 `tests/test_resource_naming.py` is what keeps this honest. It fails if any name
 below `Globals:` spells the contract prefix out instead of going through the
-parameter, if the scripts and the template disagree on the token, if
+parameter, if the scripts and the template disagree on the prefix, if
 `config.PREFIX` drifts from it — that one fails at runtime with `AccessDenied`
 rather than at deploy time, because the IAM policies are written as
-`${NamePrefix}-tenant-*` — or if a longer token pushes a name past its AWS length
+`${NamePrefix}-tenant-*` — or if the prefix pushes a name past its AWS length
 limit. `tests/test_template_contract.py` adds the same check against the
 transformed stack, on names as CloudFormation will actually see them.
 

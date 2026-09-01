@@ -548,11 +548,10 @@ def _points_at_another_resource(node, logical_ids):
 
 
 def test_every_name_the_stack_chooses_carries_this_runs_prefix(stack):
-    """A name that does not is one a previous run of this repo already owns.
+    """A name that does not carry the prefix is one the platform cannot clean up.
 
-    The contract prefix is shared by every deploy of this project, so it is the
-    run token after it that keeps a redeploy from colliding -- and that only holds
-    for names routed through the NamePrefix parameter.
+    Every physical name in the stack must route through the NamePrefix
+    parameter so it carries the fixed contract prefix.
     """
     name_prefix = _raw_template()["Parameters"]["NamePrefix"]["Default"]
     logical_ids = set(stack["Resources"])

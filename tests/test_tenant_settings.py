@@ -126,7 +126,7 @@ def test_an_integration_is_written_into_the_tenants_own_secret(secrets):
 
     assert resp["statusCode"] == 200
     kwargs = secrets["client"].put_secret_value.call_args.kwargs
-    assert kwargs["SecretId"] == "app-b9dac5ac-bc8fbf47-v2-tenant-acme-integration-creds"
+    assert kwargs["SecretId"] == "app-b9dac5ac-bc8fbf47-tenant-acme-integration-creds"
     assert json.loads(kwargs["SecretString"])["log_platform"] == {
         "endpoint": "https://logs.example.com/q", "api_key": "k"
     }
