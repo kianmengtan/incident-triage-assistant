@@ -1,6 +1,10 @@
 import os
 
-PREFIX = "app-b9dac5ac-bc8fbf47"
+# Set from the stack's NamePrefix parameter. The fallback must track that
+# parameter's default: it is what the Secrets Manager names below are built from,
+# and the IAM policies that authorise them are written as ${NamePrefix}-tenant-*,
+# so a stale value here fails at runtime rather than at deploy time.
+PREFIX = os.environ.get("NAME_PREFIX", "app-b9dac5ac-bc8fbf47-v2")
 REGION = os.environ.get("AWS_REGION", "ap-southeast-1")
 
 TENANTS_TABLE = os.environ.get("TENANTS_TABLE", f"{PREFIX}-tenants")

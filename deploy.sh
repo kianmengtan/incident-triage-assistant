@@ -4,10 +4,17 @@
 # outputs.json at the repo root with app_url pointing at the deployed console.
 set -euo pipefail
 
-PREFIX="app-b9dac5ac-bc8fbf47"
+# One run token drives every name in this deploy. Bump it (v2 -> v3) to get a
+# clean set of resources that cannot collide with a previous run: the platform
+# contract fixes the prefix in front of it, so that prefix alone is shared by
+# every deploy of this project and is not enough to keep two of them apart.
+# Passed to CloudFormation as NamePrefix, and to the functions as NAME_PREFIX,
+# so the names the handlers build at runtime match the IAM policies too.
+RUN_ID="${RUN_ID:-v2}"
+NAME_PREFIX="${NAME_PREFIX:-app-b9dac5ac-bc8fbf47-${RUN_ID}}"
 REGION="ap-southeast-1"
-STACK_NAME="${STACK_NAME:-${PREFIX}-triage}"
-ARTIFACTS_BUCKET="${TEMPLATE_BUCKET:-${PREFIX}-artifacts}"
+STACK_NAME="${STACK_NAME:-${NAME_PREFIX}-triage}"
+ARTIFACTS_BUCKET="${TEMPLATE_BUCKET:-${NAME_PREFIX}-artifacts}"
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
@@ -74,6 +81,7 @@ sam deploy \
   --s3-bucket "${ARTIFACTS_BUCKET}" \
   --region "${REGION}" \
   --capabilities CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND \
+  --parameter-overrides "NamePrefix=${NAME_PREFIX}" \
   --no-confirm-changeset \
   --no-fail-on-empty-changeset
 

@@ -4,10 +4,14 @@
 # CloudFormation never owned.
 set -euo pipefail
 
-PREFIX="app-b9dac5ac-bc8fbf47"
+# Must resolve to the same names deploy.sh created, so the run token is read the
+# same way here. A destroy pointed at a different RUN_ID silently deletes
+# nothing and reports success.
+RUN_ID="${RUN_ID:-v2}"
+NAME_PREFIX="${NAME_PREFIX:-app-b9dac5ac-bc8fbf47-${RUN_ID}}"
 REGION="ap-southeast-1"
-STACK_NAME="${STACK_NAME:-${PREFIX}-triage}"
-ARTIFACTS_BUCKET="${TEMPLATE_BUCKET:-${PREFIX}-artifacts}"
+STACK_NAME="${STACK_NAME:-${NAME_PREFIX}-triage}"
+ARTIFACTS_BUCKET="${TEMPLATE_BUCKET:-${NAME_PREFIX}-artifacts}"
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
@@ -69,7 +73,7 @@ fi
 echo "==> Cleaning up per-tenant Secrets Manager entries"
 SECRET_ARNS=$(aws secretsmanager list-secrets \
   --region "${REGION}" \
-  --filters Key=name,Values="${PREFIX}-tenant-" \
+  --filters Key=name,Values="${NAME_PREFIX}-tenant-" \
   --query 'SecretList[].ARN' \
   --output text || true)
 for arn in ${SECRET_ARNS}; do
@@ -84,10 +88,10 @@ aws s3api delete-bucket --bucket "${ARTIFACTS_BUCKET}" --region "${REGION}" 2>/d
 # deletes it on stack delete. Checked here because that delete is best-effort:
 # a leftover vector bucket is a resource the platform will not clean up.
 echo "==> Verifying the vector bucket is gone"
-if aws s3vectors get-vector-bucket --vector-bucket-name "${PREFIX}-vectors" --region "${REGION}" >/dev/null 2>&1; then
+if aws s3vectors get-vector-bucket --vector-bucket-name "${NAME_PREFIX}-vectors" --region "${REGION}" >/dev/null 2>&1; then
   echo "    still present, deleting directly"
-  aws s3vectors delete-index --vector-bucket-name "${PREFIX}-vectors" --index-name incidents --region "${REGION}" >/dev/null 2>&1 || true
-  aws s3vectors delete-vector-bucket --vector-bucket-name "${PREFIX}-vectors" --region "${REGION}" >/dev/null 2>&1 || true
+  aws s3vectors delete-index --vector-bucket-name "${NAME_PREFIX}-vectors" --index-name incidents --region "${REGION}" >/dev/null 2>&1 || true
+  aws s3vectors delete-vector-bucket --vector-bucket-name "${NAME_PREFIX}-vectors" --region "${REGION}" >/dev/null 2>&1 || true
 fi
 
 rm -f outputs.json

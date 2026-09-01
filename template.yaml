@@ -3,7 +3,24 @@ Transform: AWS::Serverless-2016-10-31
 Description: >
   Incident Triage Assistant - automated outage diagnosis and remediation
   (alert ingestion -> log/config correlation -> RAG -> Bedrock RCA -> runbook
-  -> gated remediation), multi-tenant, per platform contract app-b9dac5ac-bc8fbf47.
+  -> gated remediation), multi-tenant. Every physical name is derived from the
+  NamePrefix parameter, so a redeploy never collides with a previous run's
+  resources.
+
+Parameters:
+  # Every physical resource name in this stack is built from this one value, so a
+  # fresh set of resources is a change to the run token at the end of it (v2 ->
+  # v3) and nothing else. The platform contract fixes the part before the token --
+  # resources named outside that prefix are never cleaned up -- and the token
+  # itself is what keeps this deploy off the last one's tables, buckets and
+  # secrets. deploy.sh and destroy.sh pass it in from their shared RUN_ID.
+  NamePrefix:
+    Type: String
+    Default: app-b9dac5ac-bc8fbf47-v2
+    AllowedPattern: '^app-b9dac5ac-bc8fbf47-[a-z0-9]+$'
+    ConstraintDescription: >
+      must be the contract prefix followed by a lowercase alphanumeric run token,
+      e.g. app-b9dac5ac-bc8fbf47-v2
 
 Globals:
   Function:
@@ -16,6 +33,10 @@ Globals:
       - !Ref CommonLayer
     Environment:
       Variables:
+        # The handlers build Secrets Manager names themselves
+        # ({PREFIX}-tenant-{id}-dek and friends); this is how they land on the
+        # same prefix the IAM policies below authorise.
+        NAME_PREFIX: !Ref NamePrefix
         TENANTS_TABLE: !Ref TenantsTable
         ALERTS_TABLE: !Ref AlertsTable
         DIAGNOSTICS_TABLE: !Ref DiagnosticsTable
@@ -23,7 +44,7 @@ Globals:
         AUDIT_TABLE: !Ref AuditTrailTable
         CONTEXT_CACHE_BUCKET: !Ref ContextCacheBucket
         RUNBOOKS_BUCKET: !Ref RunbooksBucket
-        VECTOR_BUCKET: app-b9dac5ac-bc8fbf47-vectors
+        VECTOR_BUCKET: !Sub '${NamePrefix}-vectors'
         VECTOR_INDEX: incidents
         RUNBOOK_READY_TOPIC_ARN: !Ref RunbookReadyTopic
         OPS_ALARMS_TOPIC_ARN: !Ref OpsAlarmsTopic
@@ -37,7 +58,7 @@ Resources:
   CommonLayer:
     Type: AWS::Serverless::LayerVersion
     Properties:
-      LayerName: app-b9dac5ac-bc8fbf47-layer-common
+      LayerName: !Sub '${NamePrefix}-layer-common'
       # src/layer/python/, NOT src/layer/. With a BuildMethod set, SAM treats
       # ContentUri as the build source and adds the layer's own `python/` prefix
       # itself -- so pointing at src/layer/ nested the repo's python/ directory
@@ -62,7 +83,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      TableName: app-b9dac5ac-bc8fbf47-tenants
+      TableName: !Sub '${NamePrefix}-tenants'
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: tenant_id
@@ -82,7 +103,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      TableName: app-b9dac5ac-bc8fbf47-alerts
+      TableName: !Sub '${NamePrefix}-alerts'
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: tenant_id
@@ -116,7 +137,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      TableName: app-b9dac5ac-bc8fbf47-diagnostics
+      TableName: !Sub '${NamePrefix}-diagnostics'
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: tenant_id
@@ -136,7 +157,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      TableName: app-b9dac5ac-bc8fbf47-runbooks
+      TableName: !Sub '${NamePrefix}-runbooks'
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: tenant_id
@@ -167,7 +188,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      TableName: app-b9dac5ac-bc8fbf47-audit-trail
+      TableName: !Sub '${NamePrefix}-audit-trail'
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: tenant_id
@@ -193,7 +214,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      BucketName: !Sub app-b9dac5ac-bc8fbf47-context-cache-${AWS::AccountId}
+      BucketName: !Sub ${NamePrefix}-context-cache-${AWS::AccountId}
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
@@ -214,7 +235,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      BucketName: !Sub app-b9dac5ac-bc8fbf47-runbooks-${AWS::AccountId}
+      BucketName: !Sub ${NamePrefix}-runbooks-${AWS::AccountId}
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
@@ -230,7 +251,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      BucketName: !Sub app-b9dac5ac-bc8fbf47-audit-exports-${AWS::AccountId}
+      BucketName: !Sub ${NamePrefix}-audit-exports-${AWS::AccountId}
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
@@ -248,7 +269,7 @@ Resources:
   S3VectorsSetupFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: app-b9dac5ac-bc8fbf47-fn-s3vectors-setup
+      FunctionName: !Sub '${NamePrefix}-fn-s3vectors-setup'
       LoggingConfig:
         LogGroup: !Ref S3VectorsSetupFunctionLogGroup
       CodeUri: src/handlers/
@@ -273,12 +294,12 @@ Resources:
   S3VectorsSetupTopic:
     Type: AWS::SNS::Topic
     Properties:
-      TopicName: app-b9dac5ac-bc8fbf47-topic-s3vectors-setup
+      TopicName: !Sub '${NamePrefix}-topic-s3vectors-setup'
 
   S3VectorsAsyncSetupFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: app-b9dac5ac-bc8fbf47-fn-s3vectors-async-setup
+      FunctionName: !Sub '${NamePrefix}-fn-s3vectors-async-setup'
       CodeUri: src/handlers/
       Handler: s3vectors_async_setup.handler
       Timeout: 300
@@ -311,7 +332,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      QueueName: app-b9dac5ac-bc8fbf47-queue-alert-dispatch-dlq
+      QueueName: !Sub '${NamePrefix}-queue-alert-dispatch-dlq'
       MessageRetentionPeriod: 1209600
 
   # Pipeline executions that failed part-way. Messages carry the full state so a
@@ -321,7 +342,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      QueueName: app-b9dac5ac-bc8fbf47-queue-pipeline-failure-dlq
+      QueueName: !Sub '${NamePrefix}-queue-pipeline-failure-dlq'
       MessageRetentionPeriod: 1209600
 
   # Audit records that could not be written. A trail described as append-only
@@ -331,7 +352,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      QueueName: app-b9dac5ac-bc8fbf47-queue-audit-write-dlq
+      QueueName: !Sub '${NamePrefix}-queue-audit-write-dlq'
       MessageRetentionPeriod: 1209600
 
   # ---------------------------------------------------------------------
@@ -340,12 +361,12 @@ Resources:
   RunbookReadyTopic:
     Type: AWS::SNS::Topic
     Properties:
-      TopicName: !Sub app-b9dac5ac-bc8fbf47-topic-runbook-ready-${AWS::StackName}
+      TopicName: !Sub '${NamePrefix}-topic-runbook-ready'
 
   OpsAlarmsTopic:
     Type: AWS::SNS::Topic
     Properties:
-      TopicName: !Sub app-b9dac5ac-bc8fbf47-topic-ops-alarms-${AWS::StackName}
+      TopicName: !Sub '${NamePrefix}-topic-ops-alarms'
 
   # ---------------------------------------------------------------------
   # Cognito
@@ -357,7 +378,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      UserPoolName: app-b9dac5ac-bc8fbf47-cognito-userpool
+      UserPoolName: !Sub '${NamePrefix}-cognito-userpool'
       MfaConfiguration: 'OFF'
       AutoVerifiedAttributes:
         - email
@@ -378,7 +399,7 @@ Resources:
   UserPoolClient:
     Type: AWS::Cognito::UserPoolClient
     Properties:
-      ClientName: app-b9dac5ac-bc8fbf47-app-client
+      ClientName: !Sub '${NamePrefix}-app-client'
       UserPoolId: !Ref UserPool
       GenerateSecret: false
       ExplicitAuthFlows:
@@ -425,7 +446,7 @@ Resources:
   TenantScopedRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: app-b9dac5ac-bc8fbf47-role-tenant-scoped
+      RoleName: !Sub '${NamePrefix}-role-tenant-scoped'
       PermissionsBoundary: arn:aws:iam::544635841962:policy/brd-architect-deploy-boundary
       MaxSessionDuration: 3600
       AssumeRolePolicyDocument:
@@ -443,7 +464,7 @@ Resources:
               - sts:TagSession
             Condition:
               ArnLike:
-                aws:PrincipalArn: !Sub arn:aws:iam::${AWS::AccountId}:role/app-b9dac5ac-bc8fbf47-*
+                aws:PrincipalArn: !Sub arn:aws:iam::${AWS::AccountId}:role/${NamePrefix}-*
       Policies:
         - PolicyName: tenant-scoped-data-access
           PolicyDocument:
@@ -485,7 +506,7 @@ Resources:
   IngestNormalizeFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: app-b9dac5ac-bc8fbf47-fn-ingest-normalize
+      FunctionName: !Sub '${NamePrefix}-fn-ingest-normalize'
       LoggingConfig:
         LogGroup: !Ref IngestNormalizeFunctionLogGroup
       CodeUri: src/handlers/
@@ -502,7 +523,7 @@ Resources:
               Resource: !GetAtt TenantScopedRole.Arn
             - Effect: Allow
               Action: secretsmanager:GetSecretValue
-              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:app-b9dac5ac-bc8fbf47-tenant-*-ingest-hmac-*
+              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${NamePrefix}-tenant-*-ingest-hmac-*
       Events:
         PostAlert:
           Type: Api
@@ -516,7 +537,7 @@ Resources:
   CorrelateLogsFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: app-b9dac5ac-bc8fbf47-fn-correlate-logs
+      FunctionName: !Sub '${NamePrefix}-fn-correlate-logs'
       LoggingConfig:
         LogGroup: !Ref CorrelateLogsFunctionLogGroup
       CodeUri: src/handlers/
@@ -531,12 +552,12 @@ Resources:
               Resource: !GetAtt TenantScopedRole.Arn
             - Effect: Allow
               Action: secretsmanager:GetSecretValue
-              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:app-b9dac5ac-bc8fbf47-tenant-*-integration-creds-*
+              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${NamePrefix}-tenant-*-integration-creds-*
 
   CorrelateConfigFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: app-b9dac5ac-bc8fbf47-fn-correlate-config
+      FunctionName: !Sub '${NamePrefix}-fn-correlate-config'
       LoggingConfig:
         LogGroup: !Ref CorrelateConfigFunctionLogGroup
       CodeUri: src/handlers/
@@ -551,12 +572,12 @@ Resources:
               Resource: !GetAtt TenantScopedRole.Arn
             - Effect: Allow
               Action: secretsmanager:GetSecretValue
-              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:app-b9dac5ac-bc8fbf47-tenant-*-integration-creds-*
+              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${NamePrefix}-tenant-*-integration-creds-*
 
   RagContextFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: app-b9dac5ac-bc8fbf47-fn-rag-context
+      FunctionName: !Sub '${NamePrefix}-fn-rag-context'
       LoggingConfig:
         LogGroup: !Ref RagContextFunctionLogGroup
       CodeUri: src/handlers/
@@ -578,13 +599,13 @@ Resources:
                 - s3vectors:QueryVectors
                 - s3vectors:PutVectors
               Resource:
-                - !Sub arn:aws:s3vectors:${AWS::Region}:${AWS::AccountId}:bucket/app-b9dac5ac-bc8fbf47-vectors
-                - !Sub arn:aws:s3vectors:${AWS::Region}:${AWS::AccountId}:bucket/app-b9dac5ac-bc8fbf47-vectors/index/*
+                - !Sub arn:aws:s3vectors:${AWS::Region}:${AWS::AccountId}:bucket/${NamePrefix}-vectors
+                - !Sub arn:aws:s3vectors:${AWS::Region}:${AWS::AccountId}:bucket/${NamePrefix}-vectors/index/*
 
   GenerateRcaFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: app-b9dac5ac-bc8fbf47-fn-generate-rca
+      FunctionName: !Sub '${NamePrefix}-fn-generate-rca'
       LoggingConfig:
         LogGroup: !Ref GenerateRcaFunctionLogGroup
       CodeUri: src/handlers/
@@ -599,7 +620,7 @@ Resources:
               Resource: !GetAtt TenantScopedRole.Arn
             - Effect: Allow
               Action: secretsmanager:GetSecretValue
-              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:app-b9dac5ac-bc8fbf47-tenant-*-dek-*
+              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${NamePrefix}-tenant-*-dek-*
             - Effect: Allow
               Action: bedrock:InvokeModel
               Resource:
@@ -609,7 +630,7 @@ Resources:
   GenerateRunbookFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: app-b9dac5ac-bc8fbf47-fn-generate-runbook
+      FunctionName: !Sub '${NamePrefix}-fn-generate-runbook'
       LoggingConfig:
         LogGroup: !Ref GenerateRunbookFunctionLogGroup
       CodeUri: src/handlers/
@@ -631,7 +652,7 @@ Resources:
   NotifyFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: app-b9dac5ac-bc8fbf47-fn-notify
+      FunctionName: !Sub '${NamePrefix}-fn-notify'
       LoggingConfig:
         LogGroup: !Ref NotifyFunctionLogGroup
       CodeUri: src/handlers/
@@ -659,7 +680,7 @@ Resources:
   MarkPipelineFailedFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: app-b9dac5ac-bc8fbf47-fn-mark-pipeline-failed
+      FunctionName: !Sub '${NamePrefix}-fn-mark-pipeline-failed'
       LoggingConfig:
         LogGroup: !Ref MarkPipelineFailedFunctionLogGroup
       CodeUri: src/handlers/
@@ -676,7 +697,7 @@ Resources:
   NotifyImsFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: app-b9dac5ac-bc8fbf47-fn-notify-ims
+      FunctionName: !Sub '${NamePrefix}-fn-notify-ims'
       LoggingConfig:
         LogGroup: !Ref NotifyImsFunctionLogGroup
       CodeUri: src/handlers/
@@ -686,12 +707,12 @@ Resources:
         - Statement:
             - Effect: Allow
               Action: secretsmanager:GetSecretValue
-              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:app-b9dac5ac-bc8fbf47-tenant-*-integration-creds-*
+              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${NamePrefix}-tenant-*-integration-creds-*
 
   AuditWriteFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: app-b9dac5ac-bc8fbf47-fn-audit-write
+      FunctionName: !Sub '${NamePrefix}-fn-audit-write'
       LoggingConfig:
         LogGroup: !Ref AuditWriteFunctionLogGroup
       CodeUri: src/handlers/
@@ -718,7 +739,7 @@ Resources:
   TenantProvisionFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: app-b9dac5ac-bc8fbf47-fn-tenant-provision
+      FunctionName: !Sub '${NamePrefix}-fn-tenant-provision'
       LoggingConfig:
         LogGroup: !Ref TenantProvisionFunctionLogGroup
       CodeUri: src/handlers/
@@ -730,7 +751,7 @@ Resources:
               Resource: !GetAtt TenantsTable.Arn
             - Effect: Allow
               Action: secretsmanager:CreateSecret
-              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:app-b9dac5ac-bc8fbf47-tenant-*
+              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${NamePrefix}-tenant-*
             # Sets custom:tenant_id, and puts the tenant's first user in
             # TenantAdmin. Nothing else grants group membership, so without this
             # no one could ever approve remediation.
@@ -757,7 +778,7 @@ Resources:
   TenantSettingsFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: app-b9dac5ac-bc8fbf47-fn-tenant-settings
+      FunctionName: !Sub '${NamePrefix}-fn-tenant-settings'
       LoggingConfig:
         LogGroup: !Ref TenantSettingsFunctionLogGroup
       CodeUri: src/handlers/
@@ -771,7 +792,7 @@ Resources:
               Action:
                 - secretsmanager:GetSecretValue
                 - secretsmanager:PutSecretValue
-              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:app-b9dac5ac-bc8fbf47-tenant-*-integration-creds-*
+              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${NamePrefix}-tenant-*-integration-creds-*
             - Effect: Allow
               Action: lambda:InvokeFunction
               Resource: !GetAtt AuditWriteFunction.Arn
@@ -798,7 +819,7 @@ Resources:
   AuthorizerFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: app-b9dac5ac-bc8fbf47-fn-authorizer
+      FunctionName: !Sub '${NamePrefix}-fn-authorizer'
       LoggingConfig:
         LogGroup: !Ref AuthorizerFunctionLogGroup
       CodeUri: src/handlers/
@@ -816,7 +837,7 @@ Resources:
   QueryDiagnosticsFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: app-b9dac5ac-bc8fbf47-fn-query-diagnostics
+      FunctionName: !Sub '${NamePrefix}-fn-query-diagnostics'
       LoggingConfig:
         LogGroup: !Ref QueryDiagnosticsFunctionLogGroup
       CodeUri: src/handlers/
@@ -830,7 +851,7 @@ Resources:
               Resource: !GetAtt TenantScopedRole.Arn
             - Effect: Allow
               Action: secretsmanager:GetSecretValue
-              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:app-b9dac5ac-bc8fbf47-tenant-*-dek-*
+              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${NamePrefix}-tenant-*-dek-*
       Events:
         # These three were implemented and documented in the handler and wired to
         # nothing, so the incident list, the pipeline stage timeline and the whole
@@ -881,7 +902,7 @@ Resources:
   TriggerRemediationFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: app-b9dac5ac-bc8fbf47-fn-trigger-remediation
+      FunctionName: !Sub '${NamePrefix}-fn-trigger-remediation'
       LoggingConfig:
         LogGroup: !Ref TriggerRemediationFunctionLogGroup
       CodeUri: src/handlers/
@@ -901,8 +922,8 @@ Resources:
             - Effect: Allow
               Action: secretsmanager:GetSecretValue
               Resource:
-                - !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:app-b9dac5ac-bc8fbf47-tenant-*-integration-creds-*
-                - !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:app-b9dac5ac-bc8fbf47-tenant-*-dek-*
+                - !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${NamePrefix}-tenant-*-integration-creds-*
+                - !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${NamePrefix}-tenant-*-dek-*
             - Effect: Allow
               Action: lambda:InvokeFunction
               Resource:
@@ -930,7 +951,7 @@ Resources:
   IngestionApi:
     Type: AWS::Serverless::Api
     Properties:
-      Name: app-b9dac5ac-bc8fbf47-ingestion-api
+      Name: !Sub '${NamePrefix}-ingestion-api'
       StageName: prod
       TracingEnabled: false
 
@@ -939,7 +960,7 @@ Resources:
     DependsOn:
       - IngestionApiprodStage
     Properties:
-      Name: app-b9dac5ac-bc8fbf47-ingestion-api-key
+      Name: !Sub '${NamePrefix}-ingestion-api-key'
       Enabled: true
       StageKeys:
         - RestApiId: !Ref IngestionApi
@@ -950,7 +971,7 @@ Resources:
     DependsOn:
       - IngestionApiprodStage
     Properties:
-      UsagePlanName: app-b9dac5ac-bc8fbf47-ingestion-usage-plan
+      UsagePlanName: !Sub '${NamePrefix}-ingestion-usage-plan'
       ApiStages:
         - ApiId: !Ref IngestionApi
           Stage: prod
@@ -971,7 +992,7 @@ Resources:
   AdminApi:
     Type: AWS::Serverless::Api
     Properties:
-      Name: app-b9dac5ac-bc8fbf47-admin-api
+      Name: !Sub '${NamePrefix}-admin-api'
       StageName: prod
       Cors:
         # The console is served from CloudFront, a different origin, so the
@@ -1010,7 +1031,7 @@ Resources:
   AlertReceivedRule:
     Type: AWS::Events::Rule
     Properties:
-      Name: app-b9dac5ac-bc8fbf47-rule-alert-received
+      Name: !Sub '${NamePrefix}-rule-alert-received'
       EventPattern:
         source:
           - outagediag.ingestion
@@ -1048,7 +1069,7 @@ Resources:
   EventBridgeStartExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: app-b9dac5ac-bc8fbf47-role-eventbridge-sfn
+      RoleName: !Sub '${NamePrefix}-role-eventbridge-sfn'
       PermissionsBoundary: arn:aws:iam::544635841962:policy/brd-architect-deploy-boundary
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
@@ -1072,7 +1093,7 @@ Resources:
   StepFunctionsExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: app-b9dac5ac-bc8fbf47-role-sfn-execution
+      RoleName: !Sub '${NamePrefix}-role-sfn-execution'
       PermissionsBoundary: arn:aws:iam::544635841962:policy/brd-architect-deploy-boundary
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
@@ -1106,7 +1127,7 @@ Resources:
   DiagnosisPipeline:
     Type: AWS::Serverless::StateMachine
     Properties:
-      Name: app-b9dac5ac-bc8fbf47-sfn-diagnosis-pipeline
+      Name: !Sub '${NamePrefix}-sfn-diagnosis-pipeline'
       Type: STANDARD
       Role: !GetAtt StepFunctionsExecutionRole.Arn
       Tracing:
@@ -1134,7 +1155,7 @@ Resources:
   ExecutionTimedOutRule:
     Type: AWS::Events::Rule
     Properties:
-      Name: app-b9dac5ac-bc8fbf47-rule-execution-timed-out
+      Name: !Sub '${NamePrefix}-rule-execution-timed-out'
       EventPattern:
         source:
           - aws.states
@@ -1173,7 +1194,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: app-b9dac5ac-bc8fbf47-fn-s3vectors-setup-logs
+      LogGroupName: !Sub '${NamePrefix}-fn-s3vectors-setup-logs'
       RetentionInDays: 14
 
   IngestNormalizeFunctionLogGroup:
@@ -1181,7 +1202,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: app-b9dac5ac-bc8fbf47-fn-ingest-normalize-logs
+      LogGroupName: !Sub '${NamePrefix}-fn-ingest-normalize-logs'
       RetentionInDays: 14
 
   CorrelateLogsFunctionLogGroup:
@@ -1189,7 +1210,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: app-b9dac5ac-bc8fbf47-fn-correlate-logs-logs
+      LogGroupName: !Sub '${NamePrefix}-fn-correlate-logs-logs'
       RetentionInDays: 14
 
   CorrelateConfigFunctionLogGroup:
@@ -1197,7 +1218,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: app-b9dac5ac-bc8fbf47-fn-correlate-config-logs
+      LogGroupName: !Sub '${NamePrefix}-fn-correlate-config-logs'
       RetentionInDays: 14
 
   RagContextFunctionLogGroup:
@@ -1205,7 +1226,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: app-b9dac5ac-bc8fbf47-fn-rag-context-logs
+      LogGroupName: !Sub '${NamePrefix}-fn-rag-context-logs'
       RetentionInDays: 14
 
   GenerateRcaFunctionLogGroup:
@@ -1213,7 +1234,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: app-b9dac5ac-bc8fbf47-fn-generate-rca-logs
+      LogGroupName: !Sub '${NamePrefix}-fn-generate-rca-logs'
       RetentionInDays: 14
 
   GenerateRunbookFunctionLogGroup:
@@ -1221,7 +1242,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: app-b9dac5ac-bc8fbf47-fn-generate-runbook-logs
+      LogGroupName: !Sub '${NamePrefix}-fn-generate-runbook-logs'
       RetentionInDays: 14
 
   NotifyFunctionLogGroup:
@@ -1229,7 +1250,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: app-b9dac5ac-bc8fbf47-fn-notify-logs
+      LogGroupName: !Sub '${NamePrefix}-fn-notify-logs'
       RetentionInDays: 14
 
   MarkPipelineFailedFunctionLogGroup:
@@ -1237,7 +1258,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: app-b9dac5ac-bc8fbf47-fn-mark-pipeline-failed-logs
+      LogGroupName: !Sub '${NamePrefix}-fn-mark-pipeline-failed-logs'
       RetentionInDays: 14
 
   TenantSettingsFunctionLogGroup:
@@ -1245,7 +1266,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: app-b9dac5ac-bc8fbf47-fn-tenant-settings-logs
+      LogGroupName: !Sub '${NamePrefix}-fn-tenant-settings-logs'
       RetentionInDays: 14
 
   NotifyImsFunctionLogGroup:
@@ -1253,7 +1274,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: app-b9dac5ac-bc8fbf47-fn-notify-ims-logs
+      LogGroupName: !Sub '${NamePrefix}-fn-notify-ims-logs'
       RetentionInDays: 14
 
   AuditWriteFunctionLogGroup:
@@ -1261,7 +1282,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: app-b9dac5ac-bc8fbf47-fn-audit-write-logs
+      LogGroupName: !Sub '${NamePrefix}-fn-audit-write-logs'
       RetentionInDays: 14
 
   TenantProvisionFunctionLogGroup:
@@ -1269,7 +1290,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: app-b9dac5ac-bc8fbf47-fn-tenant-provision-logs
+      LogGroupName: !Sub '${NamePrefix}-fn-tenant-provision-logs'
       RetentionInDays: 14
 
   AuthorizerFunctionLogGroup:
@@ -1277,7 +1298,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: app-b9dac5ac-bc8fbf47-fn-authorizer-logs
+      LogGroupName: !Sub '${NamePrefix}-fn-authorizer-logs'
       RetentionInDays: 14
 
   QueryDiagnosticsFunctionLogGroup:
@@ -1285,7 +1306,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: app-b9dac5ac-bc8fbf47-fn-query-diagnostics-logs
+      LogGroupName: !Sub '${NamePrefix}-fn-query-diagnostics-logs'
       RetentionInDays: 14
 
   TriggerRemediationFunctionLogGroup:
@@ -1293,7 +1314,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: app-b9dac5ac-bc8fbf47-fn-trigger-remediation-logs
+      LogGroupName: !Sub '${NamePrefix}-fn-trigger-remediation-logs'
       RetentionInDays: 14
 
   # ---------------------------------------------------------------------
@@ -1313,7 +1334,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      BucketName: !Sub app-b9dac5ac-bc8fbf47-console-${AWS::AccountId}
+      BucketName: !Sub ${NamePrefix}-console-${AWS::AccountId}
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
@@ -1328,7 +1349,7 @@ Resources:
     Type: AWS::CloudFront::OriginAccessControl
     Properties:
       OriginAccessControlConfig:
-        Name: app-b9dac5ac-bc8fbf47-console-oac
+        Name: !Sub '${NamePrefix}-console-oac'
         OriginAccessControlOriginType: s3
         SigningBehavior: always
         SigningProtocol: sigv4
@@ -1337,7 +1358,7 @@ Resources:
     Type: AWS::CloudFront::Distribution
     Properties:
       DistributionConfig:
-        Comment: app-b9dac5ac-bc8fbf47 incident triage console
+        Comment: !Sub '${NamePrefix} incident triage console'
         Enabled: true
         DefaultRootObject: index.html
         PriceClass: PriceClass_100
@@ -1377,7 +1398,7 @@ Resources:
   RunbookSlaAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: app-b9dac5ac-bc8fbf47-alarm-runbook-sla
+      AlarmName: !Sub '${NamePrefix}-alarm-runbook-sla'
       AlarmDescription: Fires when a diagnosis pipeline execution exceeds the 5-minute runbook-delivery SLA.
       # ExecutionTime is only published when an execution FINISHES, so this
       # catches a slow pipeline. A HUNG one publishes no datapoint at all and is
@@ -1399,7 +1420,7 @@ Resources:
   IngestionSlaAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: app-b9dac5ac-bc8fbf47-alarm-ingestion-sla
+      AlarmName: !Sub '${NamePrefix}-alarm-ingestion-sla'
       AlarmDescription: Fires when alert ingestion (webhook to 202 response) exceeds the 1-minute SLA.
       # Threshold sits well under the function's own 30s timeout. At 60000ms
       # this alarm could never fire: Lambda kills the function at 30000ms, so
@@ -1422,7 +1443,7 @@ Resources:
   RunbookSlaTimeoutAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: app-b9dac5ac-bc8fbf47-alarm-runbook-sla-timeout
+      AlarmName: !Sub '${NamePrefix}-alarm-runbook-sla-timeout'
       AlarmDescription: >
         Fires when a diagnosis pipeline execution is killed by the state
         machine's 300s timeout. This is the case NFR-01 most cares about and the
@@ -1445,7 +1466,7 @@ Resources:
   IngestionErrorsAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: app-b9dac5ac-bc8fbf47-alarm-ingestion-errors
+      AlarmName: !Sub '${NamePrefix}-alarm-ingestion-errors'
       AlarmDescription: Fires when the ingestion webhook is erroring, i.e. alerts are being rejected or lost.
       Namespace: AWS/Lambda
       MetricName: Errors
@@ -1464,7 +1485,7 @@ Resources:
   UndispatchedAlertsAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: app-b9dac5ac-bc8fbf47-alarm-undispatched-alerts
+      AlarmName: !Sub '${NamePrefix}-alarm-undispatched-alerts'
       AlarmDescription: Fires when an alert reached EventBridge but could not be handed to the diagnosis pipeline.
       Namespace: AWS/SQS
       MetricName: ApproximateNumberOfMessagesVisible
@@ -1483,7 +1504,7 @@ Resources:
   AuditWriteFailureAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: app-b9dac5ac-bc8fbf47-alarm-audit-write-failures
+      AlarmName: !Sub '${NamePrefix}-alarm-audit-write-failures'
       AlarmDescription: Fires when an audit record could not be persisted. Anything here is a compliance gap.
       Namespace: AWS/SQS
       MetricName: ApproximateNumberOfMessagesVisible

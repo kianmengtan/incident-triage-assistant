@@ -61,7 +61,10 @@ def stack():
             if key in properties:
                 properties[key] = "s3://bucket/key"
 
-    return Translator(None, Parser()).translate(sam_template=template, parameter_values={})
+    return Translator(None, Parser()).translate(
+        sam_template=template,
+        parameter_values={"NamePrefix": template["Parameters"]["NamePrefix"]["Default"]},
+    )
 
 
 def _referenced_names(node, names, out):
@@ -495,3 +498,84 @@ def test_every_role_the_stack_creates_carries_the_permissions_boundary(stack):
         and "PermissionsBoundary" not in resource["Properties"]
     ]
     assert not without, f"roles with no PermissionsBoundary: {sorted(without)}"
+
+
+# The properties that carry a physical name we choose. Listed rather than matched
+# on a "*Name" suffix, because StageName and the CloudFront origin's DomainName
+# end the same way and must not be prefixed.
+NAME_PROPERTIES = (
+    "AlarmName",
+    "BucketName",
+    "ClientName",
+    "FunctionName",
+    "LayerName",
+    "LogGroupName",
+    "Name",
+    "QueueName",
+    "RoleName",
+    "StateMachineName",
+    "TableName",
+    "TopicName",
+    "UsagePlanName",
+    "UserPoolName",
+)
+
+
+def _rendered(node, name_prefix):
+    """A name property as a string, with NamePrefix substituted in."""
+    if isinstance(node, str):
+        return node
+    if isinstance(node, dict) and "Fn::Sub" in node:
+        template = node["Fn::Sub"]
+        template = template[0] if isinstance(template, list) else template
+        if isinstance(template, str):
+            return template.replace("${NamePrefix}", name_prefix)
+    return None
+
+
+def _points_at_another_resource(node, logical_ids):
+    """True for a Ref/GetAtt to something else in the stack, rather than a name."""
+    if not isinstance(node, dict):
+        return False
+    if isinstance(node.get("Ref"), str):
+        return node["Ref"] in logical_ids
+    target = node.get("Fn::GetAtt")
+    if isinstance(target, str):
+        return target.split(".")[0] in logical_ids
+    if isinstance(target, list) and target:
+        return target[0] in logical_ids
+    return False
+
+
+def test_every_name_the_stack_chooses_carries_this_runs_prefix(stack):
+    """A name that does not is one a previous run of this repo already owns.
+
+    The contract prefix is shared by every deploy of this project, so it is the
+    run token after it that keeps a redeploy from colliding -- and that only holds
+    for names routed through the NamePrefix parameter.
+    """
+    name_prefix = _raw_template()["Parameters"]["NamePrefix"]["Default"]
+    logical_ids = set(stack["Resources"])
+    checked = 0
+    wrong = []
+    for logical, resource in sorted(stack["Resources"].items()):
+        for prop in NAME_PROPERTIES:
+            if prop not in resource.get("Properties", {}):
+                continue
+            value = resource["Properties"][prop]
+            if _points_at_another_resource(value, logical_ids):
+                # A Lambda::Permission's FunctionName identifies the function it
+                # grants on; it does not name anything of its own.
+                continue
+            checked += 1
+            rendered = _rendered(value, name_prefix)
+            if rendered is None or not rendered.startswith(name_prefix + "-"):
+                wrong.append(f"{logical}.{prop} = {value!r}")
+
+    assert checked > 20, (
+        f"only {checked} name properties found; this test is not looking at the "
+        f"stack it thinks it is"
+    )
+    assert not wrong, (
+        f"names not derived from NamePrefix ({name_prefix}): " + "; ".join(wrong)
+    )

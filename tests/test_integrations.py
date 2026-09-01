@@ -26,7 +26,7 @@ def test_each_integration_is_read_from_the_one_tenant_secret():
         assert integrations.creds("acme", integrations.LOG_PLATFORM)["api_key"] == "k1"
         assert integrations.creds("acme", integrations.VCS)["endpoint"] == "https://git.example.com"
 
-    assert mock.call_args.kwargs["SecretId"] == "app-b9dac5ac-bc8fbf47-tenant-acme-integration-creds"
+    assert mock.call_args.kwargs["SecretId"] == "app-b9dac5ac-bc8fbf47-v2-tenant-acme-integration-creds"
 
 
 def test_an_unconfigured_integration_is_an_empty_dict():

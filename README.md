@@ -102,7 +102,7 @@ the endpoint and a boolean for whether a key is set, never the key.
   - DynamoDB: Tenants, Alerts, Diagnostics, Runbooks, and AuditTrail tables,
     all partitioned by `tenant_id` with a 6-month TTL on audit records.
   - S3: context-cache, runbooks, and audit-export buckets, plus an
-    `app-b9dac5ac-bc8fbf47-vectors` S3 Vectors bucket/index. S3 Vectors has no
+    `<prefix>-vectors` S3 Vectors bucket/index. S3 Vectors has no
     native CloudFormation resource type, and bucket/index creation can run
     long enough to blow past CloudFormation's stack-operation timeout — so
     it is never provisioned as a CFN custom resource. Instead:
@@ -123,8 +123,10 @@ the endpoint and a boolean for whether a key is set, never the key.
     `TenantAdmin`/`TenantEngineer` groups, and a `PostConfirmation` trigger
     that provisions the tenant's DynamoDB row and per-tenant secrets.
   - Secrets Manager: per-tenant webhook HMAC secret, integration
-    credentials, and encryption key, all under the
-    `app-b9dac5ac-bc8fbf47-` prefix.
+    credentials, and encryption key, all under the run prefix. These names are
+    built in Python from `common.config.PREFIX`, which the stack sets from
+    `NAME_PREFIX` — the one name in the system not written in the template, and
+    the reason that variable exists.
   - IAM: a `TenantScopedRole` assumed (with session tags) by every function
     that touches tenant data, plus per-function least-privilege policies.
 - **`src/handlers/`** — the Lambda function source described above.
@@ -151,12 +153,56 @@ the endpoint and a boolean for whether a key is set, never the key.
   passing).
 - **`deploy.sh`** / **`destroy.sh`** — idempotent build/deploy and teardown
   scripts using `sam build`/`sam deploy` against a self-managed artifacts
-  bucket (`app-b9dac5ac-bc8fbf47-artifacts`), writing `outputs.json`
+  bucket (`<prefix>-artifacts`), writing `outputs.json`
   (including `app_url`, the admin API's base URL) on success. `deploy.sh`
   also publishes to `S3VectorsSetupTopic` after a successful deploy to kick
   off vector bucket/index creation asynchronously (see above); it does not
   wait for that to finish — check the `S3VectorsAsyncSetupFunction` and
   `S3VectorsSetupFunction` CloudWatch log groups for progress/failures.
+
+## Resource naming
+
+Every physical name in the stack — tables, buckets, queues, topics, functions,
+roles, log groups, alarms, the state machine, the APIs, the Cognito pool and the
+per-tenant secrets — is derived from a single CloudFormation parameter:
+
+```yaml
+Parameters:
+  NamePrefix:
+    Type: String
+    Default: app-b9dac5ac-bc8fbf47-v2
+```
+
+The `app-b9dac5ac-bc8fbf47-` part is fixed by the platform contract: anything
+named outside it is never cleaned up. That prefix is therefore shared by *every*
+deploy of this project, which makes it useless for telling two of them apart —
+so the run token after it (`v2`) is what does. `deploy.sh` and `destroy.sh` build
+it from one `RUN_ID`:
+
+```bash
+RUN_ID="${RUN_ID:-v2}"
+NAME_PREFIX="${NAME_PREFIX:-app-b9dac5ac-bc8fbf47-${RUN_ID}}"
+```
+
+**To get a clean set of resources that cannot collide with an earlier run,** bump
+the token in three places that a test then holds together: the `NamePrefix`
+default in `template.yaml`, `RUN_ID` in `deploy.sh` and `destroy.sh`, and the
+fallback in `src/layer/python/common/config.py`. Or override it for one run
+without editing anything: `RUN_ID=v3 ./deploy.sh` (and the same `RUN_ID` when
+you later destroy it — a teardown pointed at a different token deletes nothing
+and still reports success).
+
+`tests/test_resource_naming.py` is what keeps this honest. It fails if any name
+below `Globals:` spells the contract prefix out instead of going through the
+parameter, if the scripts and the template disagree on the token, if
+`config.PREFIX` drifts from it — that one fails at runtime with `AccessDenied`
+rather than at deploy time, because the IAM policies are written as
+`${NamePrefix}-tenant-*` — or if a longer token pushes a name past its AWS length
+limit. `tests/test_template_contract.py` adds the same check against the
+transformed stack, on names as CloudFormation will actually see them.
+
+Note that the stack's IAM roles trust only `${NamePrefix}-*` principals, so runs
+are isolated from each other's roles as well as their data.
 
 ## Bedrock models used
 

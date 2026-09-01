@@ -145,7 +145,7 @@ def test_all_three_tenant_secrets_are_provisioned(harness):
     assert any(n.endswith("-dek") for n in names)
     assert any(n.endswith("-ingest-hmac") for n in names)
     assert any(n.endswith("-integration-creds") for n in names)
-    assert all(n.startswith("app-b9dac5ac-bc8fbf47-tenant-acme-retail-com") for n in names)
+    assert all(n.startswith("app-b9dac5ac-bc8fbf47-v2-tenant-acme-retail-com") for n in names)
 
 
 # ------------------------------------------------------------------- never raise
