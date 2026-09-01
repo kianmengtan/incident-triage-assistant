@@ -193,3 +193,13 @@ test('every function the app calls actually exists', async () => {
 
   assert.deepEqual(missing, [], 'these are called but defined nowhere reachable');
 });
+
+test('the favicon is inlined, not a separate file request', () => {
+  /* deploy.sh uploads exactly one HTML object, so a /favicon.ico reference would
+   * 404 on the deployed console and the tab would fall back to a blank page icon. */
+  const icon = app.match(/<link rel="icon"[^>]*>/);
+  assert.ok(icon, 'no favicon declared');
+  assert.match(icon[0], /^<link rel="icon" href="data:image\/svg\+xml,/);
+  /* Reuses the palette rather than introducing a colour. */
+  assert.match(icon[0], /%23A6482B/, 'the mark should use the accent token value');
+});
