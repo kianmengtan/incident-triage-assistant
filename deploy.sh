@@ -59,6 +59,35 @@ if ! aws s3api head-bucket --bucket "${ARTIFACTS_BUCKET}" --region "${REGION}" 2
     --create-bucket-configuration LocationConstraint="${REGION}"
 fi
 
+# ---------------------------------------------------------------------------
+# Tests first. This script used to run none, so a drifted inlined library or a
+# broken handler deployed silently and was found in the browser afterwards.
+# All three are fast and need no AWS credentials.
+# ---------------------------------------------------------------------------
+echo "==> Running backend tests"
+if [[ -x .venv/bin/python ]]; then
+  TEST_PYTHON=".venv/bin/python"
+else
+  TEST_PYTHON="${PYTHON}"
+fi
+# A failing test blocks the deploy; a missing test runner does not. pytest is a
+# development dependency (tests/requirements-test.txt) and the build environment
+# is not guaranteed to have it -- refusing to deploy over that would turn an
+# absent dev tool into an outage.
+if "${TEST_PYTHON}" -c 'import pytest' 2>/dev/null; then
+  "${TEST_PYTHON}" -m pytest -q
+else
+  echo "    WARNING: pytest is not installed for ${TEST_PYTHON}; skipping backend tests" >&2
+fi
+
+echo "==> Running front-end tests"
+( cd frontend && npm test )
+
+# The pages carry an inlined copy of lib/triage.mjs. Deploying a stale one would
+# ship a console whose logic differs from the code the tests just checked.
+echo "==> Checking the inlined front-end library is in sync"
+( cd frontend && npm run --silent check-sync )
+
 echo "==> sam build"
 sam build --use-container --template-file template.yaml
 
@@ -131,14 +160,17 @@ if [[ -z "${DISTRIBUTION_ID}" ]]; then
   echo "       Refusing to publish a console whose cache cannot be invalidated." >&2
   exit 1
 fi
-if [[ ! -f frontend/prototype.html ]]; then
-  echo "ERROR: frontend/prototype.html is missing; there is no console page to publish." >&2
+if [[ ! -f frontend/app.html ]]; then
+  echo "ERROR: frontend/app.html is missing; there is no console page to publish." >&2
   exit 1
 fi
 
 echo "==> Publishing console to s3://${CONSOLE_BUCKET}"
-# Keep lib/ and the sync script out of it: only the page is served.
-aws s3 cp frontend/prototype.html "s3://${CONSOLE_BUCKET}/index.html" \
+# app.html is the live console. prototype.html stays in the repo as the offline
+# design reference design/frontend-design.md points at, and is not deployed.
+# Only the page itself is uploaded: lib/ and the sync script are build inputs, and
+# the page already carries an inlined copy of the library.
+aws s3 cp frontend/app.html "s3://${CONSOLE_BUCKET}/index.html" \
   --content-type "text/html; charset=utf-8" \
   --cache-control "no-cache" \
   --region "${REGION}"

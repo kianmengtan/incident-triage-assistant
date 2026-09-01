@@ -1,0 +1,1726 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Triage — incident console</title>
+<style>
+/* ============================================================
+   Tokens lifted verbatim from design/reference.html :root.
+   No adjacent shades invented; every status colour below reuses
+   one of these. frontend/test/tokens.test.mjs fails if any value
+   here stops matching the reference.
+   ============================================================ */
+:root {
+  --color-bg:        #FBF7F1;
+  --color-surface:   #FFFFFF;
+  --color-raised:    #F4EDE3;
+  --color-border:    #E8DFD2;
+  --color-border-strong: #D3C5B1;
+
+  --color-ink:       #241C15;
+  --color-ink-muted: #5C4F42;
+  --color-ink-faint: #877868;
+  --color-ink-invert:#FFFDFA;
+
+  --color-accent:      #A6482B;
+  --color-accent-hover:#8A3A21;
+  --color-accent-soft: #F7E9E2;
+  --color-secondary:   #2F5D50;
+  --color-success:     #2F5D50;
+  --color-success-soft:#E4EEE9;
+  --color-warning:     #8A5B12;
+  --color-warning-soft:#F8EEDC;
+  --color-danger:      #9E2B25;
+  --color-danger-soft: #F8E6E4;
+
+  --font-body:    system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-display: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+
+  --text-sm:   14px;
+  --text-base: 17px;
+  --text-md:   20px;
+  --text-lg:   26px;
+  --text-xl:   36px;
+  --text-2xl:  52px;
+
+  --leading-body:  1.65;
+  --leading-tight: 1.15;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 16px;
+  --space-4: 24px;
+  --space-5: 32px;
+  --space-6: 48px;
+  --space-7: 72px;
+
+  --radius-sm: 8px;
+  --radius:    14px;
+  --radius-lg: 22px;
+  --radius-pill: 999px;
+
+  --shadow-sm: 0 1px 2px rgba(36, 28, 21, 0.05), 0 2px 8px rgba(36, 28, 21, 0.05);
+  --shadow:    0 2px 4px rgba(36, 28, 21, 0.05), 0 12px 28px rgba(36, 28, 21, 0.09);
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  line-height: var(--leading-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3 { font-family: var(--font-display); line-height: var(--leading-tight); margin: 0; font-weight: 600; }
+h1 { font-size: var(--text-xl); }
+h2 { font-size: var(--text-lg); }
+h3 { font-size: var(--text-md); }
+p { margin: 0 0 var(--space-3); }
+a { color: var(--color-accent); }
+
+/* The reference requires the green, never the terracotta: a focus ring must not
+   read as an error. */
+:focus-visible {
+  outline: 2.5px solid var(--color-secondary);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* ---------- controls ---------- */
+.btn {
+  font: inherit; font-weight: 600; cursor: pointer;
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-pill);
+  border: 1px solid transparent;
+  background: var(--color-raised); color: var(--color-ink);
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.btn:hover:not(:disabled) { background: var(--color-border); }
+.btn-primary { background: var(--color-accent); color: var(--color-ink-invert); }
+.btn-primary:hover:not(:disabled) { background: var(--color-accent-hover); }
+.btn-secondary { background: var(--color-secondary); color: var(--color-ink-invert); }
+.btn-quiet { background: transparent; border-color: var(--color-border-strong); }
+.btn-quiet:hover:not(:disabled) { background: var(--color-raised); }
+.btn-danger { background: var(--color-danger); color: var(--color-ink-invert); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-sm { padding: var(--space-1) var(--space-3); font-size: var(--text-sm); }
+
+.field { margin-bottom: var(--space-3); }
+.field label { display: block; font-size: var(--text-sm); font-weight: 640; margin-bottom: var(--space-1); }
+.input, select.input, textarea.input {
+  font: inherit; width: 100%;
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--color-ink);
+}
+textarea.input { min-height: 96px; resize: vertical; line-height: var(--leading-body); }
+.input:focus-visible { border-color: var(--color-secondary); }
+.help { font-size: var(--text-sm); color: var(--color-ink-muted); margin-top: var(--space-1); }
+/* ink-faint measures 4.00:1 on this background, below AA at 14px, so it is used
+   only for genuinely supplementary text -- never for anything carrying meaning. */
+.placeholder-note { color: var(--color-ink-faint); font-size: var(--text-sm); }
+
+/* ---------- surfaces ---------- */
+.card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: var(--space-4);
+  box-shadow: var(--shadow-sm);
+}
+.card + .card { margin-top: var(--space-4); }
+
+.badge {
+  display: inline-flex; align-items: center; gap: var(--space-1);
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-pill);
+  font-size: 13px; font-weight: 640; white-space: nowrap;
+}
+.badge-danger  { background: var(--color-danger-soft);  color: var(--color-danger); }
+.badge-warning { background: var(--color-warning-soft); color: var(--color-warning); }
+.badge-success { background: var(--color-success-soft); color: var(--color-success); }
+.badge-neutral { background: var(--color-raised);       color: var(--color-ink-muted); }
+
+.alert {
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
+  border-left: 3px solid;
+  font-size: var(--text-sm);
+  margin-bottom: var(--space-3);
+}
+.alert-danger  { background: var(--color-danger-soft);  border-color: var(--color-danger);  color: var(--color-danger); }
+.alert-warning { background: var(--color-warning-soft); border-color: var(--color-warning); color: var(--color-warning); }
+.alert-success { background: var(--color-success-soft); border-color: var(--color-success); color: var(--color-success); }
+.alert-info    { background: var(--color-raised);       border-color: var(--color-border-strong); color: var(--color-ink-muted); }
+
+.empty {
+  text-align: center; padding: var(--space-6) var(--space-3);
+  color: var(--color-ink-muted); font-size: var(--text-sm);
+}
+.empty strong { display: block; color: var(--color-ink); font-size: var(--text-base); margin-bottom: var(--space-1); }
+
+/* ---------- auth ---------- */
+.auth-wrap {
+  min-height: 100vh; display: grid; place-items: center;
+  padding: var(--space-4);
+}
+.auth-card { width: 100%; max-width: 460px; }
+.brand { display: flex; align-items: baseline; gap: var(--space-2); margin-bottom: var(--space-1); }
+.brand-mark { font-family: var(--font-display); font-size: var(--text-xl); }
+.brand-sub { color: var(--color-ink-muted); font-size: var(--text-sm); }
+.tabs { display: flex; gap: var(--space-1); margin: var(--space-4) 0; border-bottom: 1px solid var(--color-border); }
+.tab {
+  font: inherit; font-weight: 640; cursor: pointer;
+  background: none; border: 0; border-bottom: 2px solid transparent;
+  padding: var(--space-2) var(--space-3); color: var(--color-ink-muted);
+}
+.tab[aria-selected="true"] { color: var(--color-ink); border-bottom-color: var(--color-accent); }
+
+.checklist { list-style: none; padding: 0; margin: var(--space-2) 0 0; font-size: var(--text-sm); }
+.checklist li { display: flex; align-items: center; gap: var(--space-2); color: var(--color-ink-muted); }
+.checklist li[data-met="true"] { color: var(--color-success); }
+.checklist .tick { width: 1em; font-weight: 700; }
+.meter { display: flex; gap: 3px; margin-top: var(--space-2); }
+.meter span { height: 4px; flex: 1; background: var(--color-border); border-radius: var(--radius-pill); }
+.meter span[data-on="true"] { background: var(--color-secondary); }
+
+/* ---------- shell ---------- */
+.masthead {
+  display: flex; align-items: center; gap: var(--space-3);
+  flex-wrap: wrap;
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+}
+.masthead .spacer { flex: 1; }
+.masthead-brand { font-family: var(--font-display); font-size: var(--text-md); }
+.meta { font-size: var(--text-sm); color: var(--color-ink-muted); }
+
+nav.tabbar {
+  display: flex; gap: var(--space-1); flex-wrap: wrap;
+  padding: 0 var(--space-4);
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+}
+main { padding: var(--space-5) var(--space-4); max-width: 1100px; margin: 0 auto; }
+.view-head { margin-bottom: var(--space-4); }
+.view-head p { color: var(--color-ink-muted); font-size: var(--text-sm); margin: var(--space-1) 0 0; max-width: 70ch; }
+.row { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+
+/* ---------- tables ---------- */
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: var(--text-sm); }
+th, td { text-align: left; padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--color-border); }
+th { font-weight: 640; color: var(--color-ink-muted); white-space: nowrap; }
+tbody tr[data-clickable] { cursor: pointer; }
+tbody tr[data-clickable]:hover { background: var(--color-raised); }
+td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9em; background: var(--color-raised);
+  padding: 1px 5px; border-radius: 4px;
+}
+
+/* ---------- overview ---------- */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--space-3); }
+.tile {
+  background: var(--color-surface); border: 1px solid var(--color-border);
+  border-radius: var(--radius); padding: var(--space-3) var(--space-4);
+}
+.tile .label { font-size: var(--text-sm); color: var(--color-ink-muted); font-weight: 640; }
+.tile .value { font-family: var(--font-display); font-size: var(--text-xl); line-height: 1.1; margin-top: var(--space-1); }
+.tile .value.danger { color: var(--color-danger); }
+.tile .value.success { color: var(--color-success); }
+.tile .value.warning { color: var(--color-warning); }
+.tile .foot { font-size: 13px; color: var(--color-ink-muted); }
+
+.sevbar { display: flex; height: 12px; border-radius: var(--radius-pill); overflow: hidden; background: var(--color-border); }
+.sevbar i { display: block; }
+.sevbar i.sev1 { background: var(--color-danger); }
+.sevbar i.sev2 { background: var(--color-warning); }
+.sevbar i.sev3 { background: var(--color-secondary); }
+.sevbar i.sev4 { background: var(--color-border-strong); }
+.sevbar i.unknown { background: var(--color-ink-faint); }
+.legend { display: flex; gap: var(--space-4); flex-wrap: wrap; margin-top: var(--space-3); font-size: var(--text-sm); }
+.legend span { display: inline-flex; align-items: center; gap: var(--space-1); color: var(--color-ink-muted); }
+
+/* ---------- pipeline ---------- */
+.stages { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--space-1); }
+.stages li { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-sm); }
+.stages .glyph { width: 1.2em; text-align: center; }
+.stages li[data-state="done"] .glyph { color: var(--color-success); }
+.stages li[data-state="running"] .glyph { color: var(--color-warning); }
+.stages li[data-state="pending"] .glyph { color: var(--color-ink-faint); }
+.bar { height: 8px; background: var(--color-border); border-radius: var(--radius-pill); overflow: hidden; }
+.bar > i { display: block; height: 100%; background: var(--color-secondary); }
+.bar > i[data-tone="warning"] { background: var(--color-warning); }
+.bar > i[data-tone="danger"] { background: var(--color-danger); }
+
+.steps { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--space-3); }
+.steps li { display: grid; gap: var(--space-1); }
+
+/* ---------- toast ---------- */
+#toast {
+  position: fixed; inset-block-end: var(--space-4); inset-inline: 0;
+  display: grid; place-items: center; pointer-events: none; z-index: 20;
+}
+#toast > div {
+  background: var(--color-ink); color: var(--color-ink-invert);
+  padding: var(--space-2) var(--space-4); border-radius: var(--radius-pill);
+  box-shadow: var(--shadow); font-size: var(--text-sm);
+}
+
+@media (max-width: 700px) {
+  main { padding: var(--space-4) var(--space-3); }
+  h1 { font-size: var(--text-lg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}
+</style>
+</head>
+<body>
+
+<!-- ============================ auth ============================ -->
+<div class="auth-wrap" id="authView">
+  <div class="auth-card">
+    <div class="brand">
+      <span class="brand-mark">Triage</span>
+      <span class="brand-sub">incident diagnosis console</span>
+    </div>
+    <p class="meta">Sign in with your work email. Your organisation is determined by your email domain.</p>
+
+    <div class="card" style="margin-top:var(--space-4)">
+      <div class="tabs" role="tablist" aria-label="Sign in or create an account">
+        <button class="tab" id="tabSignIn" role="tab" aria-selected="true" aria-controls="authForm">Sign in</button>
+        <button class="tab" id="tabSignUp" role="tab" aria-selected="false" aria-controls="authForm">Create account</button>
+      </div>
+
+      <div id="authError" role="alert"></div>
+
+      <form id="authForm" novalidate>
+        <div class="field">
+          <label for="email">Work email</label>
+          <input class="input" type="email" id="email" name="email" autocomplete="email"
+                 required aria-describedby="emailHelp">
+          <div class="help" id="emailHelp">A personal address (gmail, outlook…) cannot be mapped to an organisation.</div>
+        </div>
+        <div class="field">
+          <label for="password">Password</label>
+          <input class="input" type="password" id="password" name="password" required
+                 aria-describedby="pwHelp">
+          <div id="pwHelp" hidden>
+            <div class="meter" aria-hidden="true" id="pwMeter">
+              <span></span><span></span><span></span><span></span><span></span>
+            </div>
+            <ul class="checklist" id="pwList"></ul>
+          </div>
+        </div>
+        <button class="btn btn-primary" type="submit" id="authSubmit" style="width:100%">Sign in</button>
+      </form>
+      <p class="help" id="authSwitchHint" style="margin-top:var(--space-3)"></p>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== no organisation ====================== -->
+<div class="auth-wrap" id="noTenantView" hidden>
+  <div class="auth-card card">
+    <h2>We could not determine your organisation</h2>
+    <p class="meta" style="margin-top:var(--space-2)">
+      Your account was created, but no organisation could be derived from its email
+      domain, so there is nothing it can be given access to.
+    </p>
+    <p class="meta">Sign up again with your work email address.</p>
+    <button class="btn btn-quiet" id="noTenantSignOut">Back to sign in</button>
+  </div>
+</div>
+
+<!-- ============================ app ============================ -->
+<div id="appView" hidden>
+  <header class="masthead">
+    <span class="masthead-brand">Triage</span>
+    <span class="badge badge-neutral" id="tenantChip"></span>
+    <span class="spacer"></span>
+    <span class="meta" id="whoami"></span>
+    <span class="badge badge-neutral" id="roleChip"></span>
+    <button class="btn btn-quiet btn-sm" id="signOut">Sign out</button>
+  </header>
+
+  <nav class="tabbar" id="tabbar" aria-label="Sections"></nav>
+
+  <main>
+    <div id="viewHost" aria-live="polite" aria-relevant="additions text"></div>
+  </main>
+</div>
+
+<div id="toast" aria-live="polite" aria-atomic="true"></div>
+
+<script>
+/* --- triage:lib start --- */
+/* Pure, DOM-free logic for the Incident Triage console.
+ *
+ * This file is the source of truth. The copy inlined into prototype.html is
+ * generated by `node frontend/sync-lib.mjs`, so that the prototype stays a
+ * single self-contained file you can open from disk while this logic stays
+ * unit-testable. `node --test frontend/test/` fails if the two drift apart.
+ */
+
+/* SLA budgets come straight from the BRD's non-functional requirements. */
+var SLA_BUDGET_MS = 5 * 60 * 1000; /* NFR-01: runbook delivered within 5 min */
+var SLA_WARN_AT_FRACTION = 0.8; /* warn with a fifth of the budget left */
+
+/* Severity maps onto the badge tones already defined in design/reference.html.
+ * Each carries a glyph and a word as well as a colour, so severity is never
+ * communicated by colour alone. */
+var SEVERITY = {
+  SEV1: { label: 'SEV1', tone: 'danger', glyph: '◆', text: 'Critical' },
+  SEV2: { label: 'SEV2', tone: 'warning', glyph: '▲', text: 'High' },
+  SEV3: { label: 'SEV3', tone: 'neutral', glyph: '●', text: 'Moderate' },
+  SEV4: { label: 'SEV4', tone: 'neutral', glyph: '○', text: 'Low' }
+};
+
+var SEVERITY_ALIASES = {
+  critical: 'SEV1', p1: 'SEV1', sev1: 'SEV1',
+  high: 'SEV2', major: 'SEV2', p2: 'SEV2', sev2: 'SEV2',
+  moderate: 'SEV3', medium: 'SEV3', warning: 'SEV3', p3: 'SEV3', sev3: 'SEV3',
+  low: 'SEV4', minor: 'SEV4', info: 'SEV4', p4: 'SEV4', sev4: 'SEV4'
+};
+
+function severityMeta(severity) {
+  var key = String(severity == null ? '' : severity).trim().toLowerCase();
+  var resolved = SEVERITY_ALIASES[key];
+  if (resolved) return SEVERITY[resolved];
+  return { label: 'UNKNOWN', tone: 'neutral', glyph: '○', text: 'Unclassified' };
+}
+
+/* Approval / execution state, mapped onto existing badge tones.
+ *
+ * These are two separate facts on the runbook row and the map covers both, because
+ * a single badge renders whichever one the caller has. `approval_status` records
+ * the human decision (pending / approved / declined); `execution_status` records
+ * what the remediation platform did (not_started / in_progress / succeeded /
+ * failed / skipped).
+ *
+ * The map used to carry `executed`, which no handler emits, and had no entry for
+ * any of the five execution_status values that are actually written -- so a
+ * successfully executed remediation rendered as "Unknown". */
+var APPROVAL = {
+  /* approval_status */
+  pending: { tone: 'warning', glyph: '○', text: 'Awaiting approval' },
+  approved: { tone: 'neutral', glyph: '◐', text: 'Approved, executing' },
+  declined: { tone: 'neutral', glyph: '—', text: 'Declined' },
+  /* execution_status */
+  not_started: { tone: 'idle', glyph: '·', text: 'Not started' },
+  in_progress: { tone: 'neutral', glyph: '◐', text: 'Executing' },
+  succeeded: { tone: 'success', glyph: '✓', text: 'Executed' },
+  failed: { tone: 'danger', glyph: '✕', text: 'Execution failed' },
+  /* C-02 again: no remediation platform configured is not a failure, but it is
+   * not success either -- someone still has to run the runbook by hand. */
+  skipped: { tone: 'warning', glyph: '⊘', text: 'Not executed — no platform configured' }
+};
+
+function approvalMeta(status) {
+  var key = String(status == null ? '' : status).trim().toLowerCase();
+  return APPROVAL[key] || { tone: 'neutral', glyph: '○', text: 'Unknown' };
+}
+
+/* Pipeline stages mirror the Step Functions state machine in spec/design.md. */
+var STAGE_TONES = {
+  pending: 'idle',
+  running: 'active',
+  done: 'success',
+  failed: 'danger',
+  skipped: 'warning'
+};
+
+function stageTone(status) {
+  return STAGE_TONES[String(status)] || 'idle';
+}
+
+/* A stage that is skipped still counts as resolved: C-02 says config data may
+ * simply not be available from a tenant's VCS, and that is not a failure. */
+function pipelineProgress(stages) {
+  if (!Array.isArray(stages) || stages.length === 0) return 0;
+  var resolved = 0;
+  for (var i = 0; i < stages.length; i++) {
+    var status = stages[i] && stages[i].status;
+    if (status === 'done' || status === 'skipped' || status === 'failed') resolved++;
+  }
+  return resolved / stages.length;
+}
+
+function pipelineIsComplete(stages) {
+  return pipelineProgress(stages) === 1;
+}
+
+function pipelineHasFailure(stages) {
+  if (!Array.isArray(stages)) return false;
+  return stages.some(function (s) { return s && s.status === 'failed'; });
+}
+
+/* mm:ss, or h:mm:ss once past an hour. Negative and non-finite clamp to 0:00 so
+ * a clock skew never renders "-1:-3". */
+function formatElapsed(ms) {
+  var total = Number(ms);
+  if (!isFinite(total) || total < 0) total = 0;
+  var seconds = Math.floor(total / 1000);
+  var hours = Math.floor(seconds / 3600);
+  var minutes = Math.floor((seconds % 3600) / 60);
+  var secs = seconds % 60;
+  var pad = function (n) { return n < 10 ? '0' + n : String(n); };
+  if (hours > 0) return hours + ':' + pad(minutes) + ':' + pad(secs);
+  return minutes + ':' + pad(secs);
+}
+
+/* The SLA budget bar. Tone escalates as the 5-minute budget is spent, so a
+ * long-running pipeline reads as "still fine" or "about to breach" at a glance
+ * rather than as an undifferentiated spinner. */
+function slaState(elapsedMs, budgetMs) {
+  var budget = Number(budgetMs);
+  if (!isFinite(budget) || budget <= 0) budget = SLA_BUDGET_MS;
+  var elapsed = Number(elapsedMs);
+  if (!isFinite(elapsed) || elapsed < 0) elapsed = 0;
+
+  /* One rule for every budget. The special case this replaces computed the
+     same number twice over: 4:00 is exactly 0.8 x 5:00. */
+  var warnAt = budget * SLA_WARN_AT_FRACTION;
+  var tone = 'ok';
+  if (elapsed > budget) tone = 'danger';
+  else if (elapsed >= warnAt) tone = 'warning';
+
+  return {
+    pct: Math.max(0, Math.min(100, (elapsed / budget) * 100)),
+    tone: tone,
+    breached: elapsed > budget,
+    remainingMs: Math.max(0, budget - elapsed),
+    budgetMs: budget
+  };
+}
+
+/* Authorisation. Requirement 7 gives approval authority to TenantAdmin alone.
+ * The UI asks this before rendering the button so a non-admin sees a disabled
+ * control with a reason, rather than clicking into a 403. */
+var APPROVER_GROUP = 'TenantAdmin';
+var KNOWN_ROLES = ['TenantAdmin', 'TenantEngineer', 'TenantLeadership'];
+
+function canApprove(role) {
+  /* Delegates to the capability matrix so this and `can` cannot disagree. */
+  return can(role, 'approve_remediation');
+}
+
+function approvalBlockReason(role) {
+  if (canApprove(role)) return null;
+  if (KNOWN_ROLES.indexOf(String(role)) !== -1) {
+    return 'Approval is restricted to Tenant Admins. Ask an admin on your team to review and approve this runbook.';
+  }
+  return 'Your session does not carry a recognised role. Sign in again to approve remediation.';
+}
+
+/* Tenant isolation (Requirement 6.3 / C-01). The client refuses to render a
+ * resource whose tenant does not match the session, so a mis-scoped API
+ * response surfaces as a visible denial instead of leaking across tenants. */
+function isTenantMatch(sessionTenantId, resourceTenantId) {
+  if (!sessionTenantId || !resourceTenantId) return false;
+  return String(sessionTenantId) === String(resourceTenantId);
+}
+
+/* Identifiers the user might paste or type. */
+function extractIds(text) {
+  var source = String(text == null ? '' : text);
+  var alerts = source.match(/\bALT-\d{3,}\b/gi) || [];
+  var runbooks = source.match(/\bRB-\d{3,}\b/gi) || [];
+  var upper = function (s) { return s.toUpperCase(); };
+  return { alertIds: alerts.map(upper), runbookIds: runbooks.map(upper) };
+}
+
+/* Intent routing.
+ *
+ * In production this is Bedrock tool-use inside fn-chat; here it stands in for
+ * the model and also drives the prototype. `approve` is deliberately NOT an
+ * executable intent: it resolves to `focus_approval`, which scrolls to the
+ * approval card and focuses it. Typed text never triggers remediation. */
+function routeIntent(text) {
+  var raw = String(text == null ? '' : text).trim();
+  var q = raw.toLowerCase();
+  var ids = extractIds(raw);
+  var params = {};
+  if (ids.alertIds.length) params.alertId = ids.alertIds[0];
+  if (ids.runbookIds.length) params.runbookId = ids.runbookIds[0];
+
+  if (!q) return { intent: 'noop', params: params };
+
+  /* Safety first: anything that smells like an approval command is routed to
+   * the card, never to an action. */
+  if (/\b(approve|authorise|authorize|execute|run it|go ahead|do it|ship it)\b/.test(q)) {
+    return { intent: 'focus_approval', params: params };
+  }
+  if (/\b(decline|reject|cancel|abort|don't|stop)\b/.test(q)) {
+    return { intent: 'focus_approval', params: params };
+  }
+  if (/\b(runbook|step|remediat|fix|playbook)/.test(q)) {
+    return { intent: 'show_runbook', params: params };
+  }
+  if (/\b(chang|commit|deploy|diff|git|release|rollback|rolled back)/.test(q)) {
+    return { intent: 'show_changes', params: params };
+  }
+  if (/\b(log|trace|stack|error|exception|throw)/.test(q)) {
+    return { intent: 'show_logs', params: params };
+  }
+  if (/\b(audit|who approved|history|trail)/.test(q)) {
+    return { intent: 'show_audit', params: params };
+  }
+  if (/\b(status|progress|how long|eta|done yet|finished)/.test(q)) {
+    return { intent: 'pipeline_status', params: params };
+  }
+  if (/\b(list|open|active|incident|alert)\b|what(?:'s| is| are)? *(going on|broken|happening|down|failing|on fire)/.test(q)) {
+    return { intent: 'list_incidents', params: params };
+  }
+  if (/\b(why|root cause|what happened|cause|diagnos|rca)/.test(q)) {
+    return { intent: 'show_diagnosis', params: params };
+  }
+  if (/\b(export|download|json|api)/.test(q)) {
+    return { intent: 'export_runbook', params: params };
+  }
+  if (/\b(help|what can you|how do i)/.test(q)) {
+    return { intent: 'help', params: params };
+  }
+  if (params.alertId || params.runbookId) {
+    return { intent: 'show_diagnosis', params: params };
+  }
+  return { intent: 'unknown', params: params };
+}
+
+/* Redaction for anything echoed out of a customer's logs.
+ *
+ * docs/brd.md flags application logs as possibly containing usernames, session
+ * IDs and request data. IPs keep their first two octets because an operator
+ * genuinely needs to know which subnet a host sits in. */
+function redact(text) {
+  return String(text == null ? '' : text)
+    .replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, '‹redacted:email›')
+    .replace(/\b(AKIA|ASIA)[0-9A-Z]{16}\b/g, '‹redacted:aws-key›')
+    .replace(/\b(bearer|token|authorization)\s*[:=]?\s*[A-Za-z0-9._~+/-]{12,}=*/gi, '‹redacted:credential›')
+    .replace(/\b([0-9]{1,3}\.[0-9]{1,3})\.[0-9]{1,3}\.[0-9]{1,3}\b/g, '$1.x.x')
+    .replace(/\b[0-9a-f]{32,}\b/gi, '‹redacted:token›');
+}
+
+/* Redaction for a whole record's worth of free text.
+ *
+ * Change history needs this as much as log output does: a config diff is the
+ * single most likely place a token or a connection string appears, and the
+ * Evidence panel tells the operator that everything in it has been redacted. */
+function redactAll(values) {
+  return (values || []).map(redact);
+}
+
+/* Relative time for the incident rail. Short, because the rail is narrow. */
+function relativeTime(fromMs, nowMs) {
+  var now = Number(nowMs);
+  if (!isFinite(now)) now = Date.now();
+  var delta = now - Number(fromMs);
+  if (!isFinite(delta) || delta < 0) delta = 0;
+  var mins = Math.floor(delta / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return mins + 'm ago';
+  var hours = Math.floor(mins / 60);
+  if (hours < 24) return hours + 'h ago';
+  var days = Math.floor(hours / 24);
+  return days + 'd ago';
+}
+
+/* Escaping, because every card renders customer-controlled strings (service
+ * names, log lines, commit messages) into the DOM. */
+function escapeHtml(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+/* Prose that is allowed a little inline emphasis, and nothing else.
+ *
+ * The narrative fields — the one-line cause, the reasoning paragraphs, the
+ * remediation step text — are written with <strong>, <em> and <code> in them,
+ * and in the deployed system they arrive from Bedrock rather than from a
+ * trusted author. Escaping them wholesale would print the tags; interpolating
+ * them raw, which is what the render functions used to do, makes every one of
+ * them an injection point for model output.
+ *
+ * So: escape everything, then re-permit exactly these tags, with no attributes.
+ * `<code onclick=...>` stays escaped, because the pattern only matches a tag
+ * name followed by an optional slash and the closing bracket. */
+var INLINE_TAGS = /&lt;(\/?)(strong|em|code|b|i|br)\s*\/?&gt;/gi;
+
+function richText(value) {
+  return escapeHtml(value).replace(INLINE_TAGS, function (match, slash, tag) {
+    return '<' + slash + tag.toLowerCase() + '>';
+  });
+}
+
+
+/* ---------- Role capabilities ----------
+ *
+ * Mirrors the matrix in src/layer/python/common/rbac.py so the interface can
+ * disable a control and explain why, rather than letting someone click into a
+ * 403 (design/frontend-design.md section 5).
+ *
+ * This is NOT authorisation. Every capability is checked again inside the
+ * handler, because anything the browser decides the browser can also skip; this
+ * copy exists only so the UI can be honest before the request is made.
+ * tests/test_rbac_parity.py fails if the two ever disagree. */
+var CAPABILITIES = {
+  view_incidents: ['TenantAdmin', 'TenantEngineer', 'TenantLeadership'],
+  view_diagnosis: ['TenantAdmin', 'TenantEngineer', 'TenantLeadership'],
+  view_runbooks: ['TenantAdmin', 'TenantEngineer', 'TenantLeadership'],
+  create_incident: ['TenantAdmin', 'TenantEngineer'],
+  approve_remediation: ['TenantAdmin'],
+  view_audit: ['TenantAdmin', 'TenantLeadership'],
+  view_overview: ['TenantAdmin', 'TenantLeadership'],
+  view_team: ['TenantAdmin', 'TenantLeadership'],
+  manage_integrations: ['TenantAdmin'],
+  manage_roles: ['TenantAdmin']
+};
+
+var ROLE_LABELS = {
+  TenantAdmin: 'Tenant Admins',
+  TenantEngineer: 'Tenant Engineers',
+  TenantLeadership: 'Tenant Leadership'
+};
+
+var ROLE_NAMES = {
+  TenantAdmin: 'Admin',
+  TenantEngineer: 'Engineer',
+  TenantLeadership: 'Leadership'
+};
+
+var CAPABILITY_VERBS = {
+  view_incidents: 'view incidents',
+  view_diagnosis: 'view a diagnosis',
+  view_runbooks: 'view runbooks',
+  create_incident: 'raise an incident',
+  approve_remediation: 'approve remediation',
+  view_audit: 'read the audit trail',
+  view_overview: 'see the tenant overview',
+  view_team: 'see the team',
+  manage_integrations: 'view or change integrations',
+  manage_roles: "change a teammate's role"
+};
+
+/* Throws on an unknown capability rather than returning false: a misspelling
+ * that merely denied would disable the control for everyone including admins,
+ * and look like a data problem instead of a typo. */
+function can(role, capability) {
+  var holders = CAPABILITIES[capability];
+  if (!holders) throw new Error('unknown capability: ' + capability);
+  return holders.indexOf(String(role)) !== -1;
+}
+
+function capabilityDenialReason(role, capability) {
+  if (can(role, capability)) return null;
+  var verb = CAPABILITY_VERBS[capability] || capability.replace(/_/g, ' ');
+  if (!ROLE_LABELS[role]) {
+    return 'Your session does not carry a recognised role, so you cannot ' + verb +
+      '. Sign in again.';
+  }
+  var holders = CAPABILITIES[capability].map(function (r) { return ROLE_LABELS[r] || r; });
+  return 'Only ' + holders.join(' or ') + ' may ' + verb + '.';
+}
+
+function roleName(role) {
+  return ROLE_NAMES[role] || 'No role';
+}
+
+/* ---------- Sign-up input ----------
+ *
+ * Mirrors common/tenancy.py. Tenancy is derived from the email domain, so a
+ * consumer address cannot belong to an organisation. fn-pre-signup refuses these
+ * server-side; checking here too means the form can say so before submitting
+ * rather than surfacing a Cognito error. */
+var PUBLIC_EMAIL_DOMAINS = [
+  'gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com', 'live.com',
+  'yahoo.com', 'icloud.com', 'me.com', 'aol.com', 'proton.me', 'protonmail.com',
+  'gmx.com', 'mail.com', 'yandex.com', 'zoho.com', 'qq.com'
+];
+
+function emailDomain(email) {
+  var value = String(email == null ? '' : email).trim();
+  var at = value.lastIndexOf('@');
+  if (at < 1 || at === value.length - 1) return null;
+  return value.slice(at + 1).toLowerCase() || null;
+}
+
+function isPublicEmailDomain(email) {
+  var domain = emailDomain(email);
+  return domain !== null && PUBLIC_EMAIL_DOMAINS.indexOf(domain) !== -1;
+}
+
+/* The reason this address cannot be used, or null. */
+function signupEmailProblem(email) {
+  var domain = emailDomain(email);
+  if (domain === null) return 'Enter a valid work email address.';
+  if (domain.indexOf('.') === -1) return 'Enter a valid work email address.';
+  if (PUBLIC_EMAIL_DOMAINS.indexOf(domain) !== -1) {
+    return domain + ' is a personal email provider. Use your work email so your ' +
+      'account joins your organisation.';
+  }
+  return null;
+}
+
+/* ---------- Password rules ----------
+ *
+ * Mirrors Cognito's DEFAULT password policy, which CLAUDE.md requires leaving
+ * unchanged. So this mirrors and never adds: a form demanding more than the pool
+ * enforces would reject passwords the pool would have accepted, and the person
+ * would have no way to discover which rule was ours rather than Cognito's. */
+var PASSWORD_MIN_LENGTH = 8;
+
+var PASSWORD_RULES = [
+  { id: 'length', text: 'At least ' + PASSWORD_MIN_LENGTH + ' characters',
+    test: function (v) { return v.length >= PASSWORD_MIN_LENGTH; } },
+  { id: 'lower', text: 'A lowercase letter', test: function (v) { return /[a-z]/.test(v); } },
+  { id: 'upper', text: 'An uppercase letter', test: function (v) { return /[A-Z]/.test(v); } },
+  { id: 'digit', text: 'A number', test: function (v) { return /[0-9]/.test(v); } },
+  /* Cognito's own symbol set. */
+  { id: 'symbol', text: 'A symbol',
+    test: function (v) { return /[\^$*.\[\]{}()?"!@#%&/\\,><':;|_~`=+\- ]/.test(v); } }
+];
+
+function passwordChecklist(password) {
+  var value = String(password == null ? '' : password);
+  return PASSWORD_RULES.map(function (rule) {
+    return { id: rule.id, text: rule.text, met: rule.test(value) };
+  });
+}
+
+function passwordIsAcceptable(password) {
+  return passwordChecklist(password).every(function (item) { return item.met; });
+}
+
+/* 0-5, for a meter. Deliberately just "how many rules are met" -- an entropy
+ * score would imply a judgement the pool does not actually enforce. */
+function passwordStrength(password) {
+  return passwordChecklist(password).filter(function (i) { return i.met; }).length;
+}
+
+/* ---------- Tenant overview ----------
+ *
+ * The cross-incident picture for TenantLeadership, computed from what two
+ * existing endpoints already return: GET /v1/alerts and GET /v1/runbooks. No new
+ * backend aggregation, and nothing here invents a number the API cannot support.
+ *
+ * The SLA figure is the real NFR-01 measurement: a runbook delivered within five
+ * minutes of the alert arriving. An incident with no runbook yet is counted as
+ * pending while it is inside the budget and breached once it is past it -- so a
+ * pipeline that silently never finished shows up, rather than being omitted for
+ * having no runbook to measure. */
+function summarise(incidents, runbooks, now) {
+  var at = typeof now === 'number' ? now : Date.now();
+  var list = Array.isArray(incidents) ? incidents : [];
+  var books = Array.isArray(runbooks) ? runbooks : [];
+
+  var byAlert = {};
+  books.forEach(function (rb) {
+    if (rb && rb.alert_id) byAlert[String(rb.alert_id)] = rb;
+  });
+
+  var summary = {
+    total: list.length,
+    bySeverity: { SEV1: 0, SEV2: 0, SEV3: 0, SEV4: 0, UNKNOWN: 0 },
+    raisedByHand: 0,
+    diagnosed: 0,
+    awaitingRunbook: 0,
+    awaitingApproval: 0,
+    approved: 0,
+    declined: 0,
+    executed: 0,
+    executionFailed: 0,
+    slaMet: 0,
+    slaBreached: 0,
+    slaPending: 0,
+    last24h: 0,
+    oldestOpenMs: 0,
+    runbookTimesMs: []
+  };
+
+  list.forEach(function (incident) {
+    var meta = severityMeta(incident && incident.severity);
+    var key = meta.label === 'UNKNOWN' ? 'UNKNOWN' : meta.label;
+    if (summary.bySeverity[key] === undefined) summary.bySeverity[key] = 0;
+    summary.bySeverity[key] += 1;
+
+    if (String(incident && incident.source) === 'console') summary.raisedByHand += 1;
+
+    var receivedMs = Number(incident && incident.received_at) * 1000;
+    var ageMs = isFinite(receivedMs) ? at - receivedMs : 0;
+    if (isFinite(receivedMs) && ageMs <= 24 * 60 * 60 * 1000) summary.last24h += 1;
+
+    var runbook = byAlert[String(incident && incident.alert_id)];
+
+    if (runbook) {
+      summary.diagnosed += 1;
+
+      var generatedMs = Number(runbook.generated_at) * 1000;
+      if (isFinite(receivedMs) && isFinite(generatedMs) && generatedMs >= receivedMs) {
+        var tookMs = generatedMs - receivedMs;
+        summary.runbookTimesMs.push(tookMs);
+        if (tookMs <= SLA_BUDGET_MS) summary.slaMet += 1;
+        else summary.slaBreached += 1;
+      }
+
+      if (runbook.approval_status === 'pending') summary.awaitingApproval += 1;
+      if (runbook.approval_status === 'approved') summary.approved += 1;
+      if (runbook.approval_status === 'declined') summary.declined += 1;
+      if (runbook.execution_status === 'succeeded') summary.executed += 1;
+      if (runbook.execution_status === 'failed') summary.executionFailed += 1;
+    } else {
+      summary.awaitingRunbook += 1;
+      /* No runbook yet. Inside the budget it is still pending; past it the
+       * budget has been missed whether or not one ever arrives. */
+      if (ageMs > SLA_BUDGET_MS) summary.slaBreached += 1;
+      else summary.slaPending += 1;
+      if (ageMs > summary.oldestOpenMs) summary.oldestOpenMs = ageMs;
+    }
+  });
+
+  summary.medianRunbookMs = median(summary.runbookTimesMs);
+  return summary;
+}
+
+function median(values) {
+  if (!values.length) return null;
+  var sorted = values.slice().sort(function (a, b) { return a - b; });
+  var mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : Math.round((sorted[mid - 1] + sorted[mid]) / 2);
+}
+
+/* --- triage:lib end --- */
+</script>
+
+<script>
+/* ============================================================
+   The live console.
+
+   Talks to two things: the Cognito user pool directly (sign-up and sign-in,
+   plain JSON over fetch -- the pool has no client secret and allows
+   USER_PASSWORD_AUTH, so no SDK and no hosted UI are needed), and the admin API
+   with the resulting ID token as a bearer.
+
+   Role gating here is presentation only. Every capability is enforced again in
+   the Lambda handler via common/rbac.py, because anything this file decides can
+   be skipped by anyone with the developer tools open. What it buys is honesty:
+   a control that will be refused renders disabled with the reason, instead of
+   looking available and failing on click.
+   ============================================================ */
+var CONFIG = null;
+var session = null;   /* { idToken, refreshToken, email, tenantId, role, expMs } */
+var STORE_KEY = 'triage.session';
+
+var $ = function (id) { return document.getElementById(id); };
+
+function el(html) {
+  var t = document.createElement('template');
+  t.innerHTML = String(html).trim();
+  return t.content.firstElementChild;
+}
+
+function toast(message) {
+  var host = $('toast');
+  host.innerHTML = '';
+  host.appendChild(el('<div>' + escapeHtml(message) + '</div>'));
+  setTimeout(function () { host.innerHTML = ''; }, 4000);
+}
+
+/* ---------- session ---------- */
+
+/* A JWT payload is base64url. Read only: the signature is verified server-side by
+   the authorizer against the pool's JWKS, so nothing here is trusted for
+   authorisation -- it only decides what to draw. */
+function decodeJwt(token) {
+  try {
+    var part = String(token).split('.')[1];
+    var b64 = part.replace(/-/g, '+').replace(/_/g, '/');
+    while (b64.length % 4) b64 += '=';
+    return JSON.parse(decodeURIComponent(escape(atob(b64))));
+  } catch (e) {
+    return null;
+  }
+}
+
+function sessionFromTokens(tokens) {
+  var claims = decodeJwt(tokens.IdToken);
+  if (!claims) return null;
+  var groups = claims['cognito:groups'] || [];
+  var role = '';
+  ['TenantAdmin', 'TenantEngineer', 'TenantLeadership'].forEach(function (candidate) {
+    if (!role && groups.indexOf(candidate) !== -1) role = candidate;
+  });
+  return {
+    idToken: tokens.IdToken,
+    refreshToken: tokens.RefreshToken || (session && session.refreshToken) || '',
+    email: claims.email || '',
+    tenantId: claims['custom:tenant_id'] || '',
+    role: role,
+    expMs: (Number(claims.exp) || 0) * 1000
+  };
+}
+
+/* sessionStorage, not localStorage: a bearer token should not outlive the tab it
+   was obtained in. */
+function saveSession() {
+  try { sessionStorage.setItem(STORE_KEY, JSON.stringify(session)); } catch (e) { /* private mode */ }
+}
+function loadSession() {
+  try {
+    var raw = sessionStorage.getItem(STORE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) { return null; }
+}
+function clearSession() {
+  session = null;
+  try { sessionStorage.removeItem(STORE_KEY); } catch (e) { /* ignore */ }
+}
+
+/* ---------- Cognito ---------- */
+
+function cognito(action, body) {
+  return fetch('https://cognito-idp.' + CONFIG.region + '.amazonaws.com/', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-amz-json-1.1',
+      'X-Amz-Target': 'AWSCognitoIdentityProviderService.' + action
+    },
+    body: JSON.stringify(body)
+  }).then(function (resp) {
+    return resp.json().catch(function () { return {}; }).then(function (data) {
+      if (resp.ok) return data;
+      /* Cognito puts the useful part in __type and message; PreSignUp rejections
+         arrive here with our own explanation as the message. */
+      var msg = data.message || data.Message || data.__type || 'Sign-in failed';
+      throw new Error(String(msg).replace(/^PreSignUp failed with error /, ''));
+    });
+  });
+}
+
+function signUp(email, password) {
+  return cognito('SignUp', {
+    ClientId: CONFIG.userPoolClientId,
+    Username: email,
+    Password: password,
+    UserAttributes: [{ Name: 'email', Value: email }]
+  });
+}
+
+function signIn(email, password) {
+  return cognito('InitiateAuth', {
+    AuthFlow: 'USER_PASSWORD_AUTH',
+    ClientId: CONFIG.userPoolClientId,
+    AuthParameters: { USERNAME: email, PASSWORD: password }
+  }).then(function (data) {
+    if (!data.AuthenticationResult) throw new Error('Sign-in did not return a session');
+    return data.AuthenticationResult;
+  });
+}
+
+function refresh() {
+  if (!session || !session.refreshToken) return Promise.reject(new Error('no refresh token'));
+  return cognito('InitiateAuth', {
+    AuthFlow: 'REFRESH_TOKEN_AUTH',
+    ClientId: CONFIG.userPoolClientId,
+    AuthParameters: { REFRESH_TOKEN: session.refreshToken }
+  }).then(function (data) {
+    if (!data.AuthenticationResult) throw new Error('could not refresh');
+    session = sessionFromTokens(data.AuthenticationResult);
+    saveSession();
+    return session;
+  });
+}
+
+/* ---------- admin API ---------- */
+
+function api(path, options) {
+  var opts = options || {};
+  var attempt = function () {
+    return fetch(CONFIG.adminApiUrl + path, {
+      method: opts.method || 'GET',
+      headers: {
+        'Authorization': 'Bearer ' + session.idToken,
+        'Content-Type': 'application/json'
+      },
+      body: opts.body ? JSON.stringify(opts.body) : undefined
+    });
+  };
+
+  return attempt().then(function (resp) {
+    /* A 401 here is the authorizer rejecting the token, which for a long-lived
+       tab is almost always simple expiry. One silent refresh and retry, rather
+       than bouncing someone to the sign-in screen mid-task. */
+    if (resp.status === 401 && !opts.retried) {
+      return refresh().then(function () {
+        return api(path, Object.assign({}, opts, { retried: true }));
+      }).catch(function () {
+        signOutNow('Your session expired. Sign in again.');
+        throw new Error('session expired');
+      });
+    }
+    return resp.json().catch(function () { return {}; }).then(function (data) {
+      if (!resp.ok) {
+        var err = new Error(data.message || ('Request failed (' + resp.status + ')'));
+        err.status = resp.status;
+        throw err;
+      }
+      return data;
+    });
+  });
+}
+
+/* ---------- auth screen ---------- */
+
+var mode = 'signin';
+
+function setMode(next) {
+  mode = next;
+  var up = mode === 'signup';
+  $('tabSignIn').setAttribute('aria-selected', String(!up));
+  $('tabSignUp').setAttribute('aria-selected', String(up));
+  $('authSubmit').textContent = up ? 'Create account' : 'Sign in';
+  $('pwHelp').hidden = !up;
+  $('password').setAttribute('autocomplete', up ? 'new-password' : 'current-password');
+  $('authSwitchHint').textContent = up
+    ? 'The first person from your email domain becomes its Tenant Admin. Everyone after joins as a Tenant Engineer.'
+    : '';
+  $('authError').innerHTML = '';
+  if (up) renderPasswordHelp($('password').value);
+}
+
+function renderPasswordHelp(value) {
+  var items = passwordChecklist(value);
+  $('pwList').innerHTML = items.map(function (item) {
+    return '<li data-met="' + item.met + '"><span class="tick">' +
+      (item.met ? '✓' : '·') + '</span>' + escapeHtml(item.text) + '</li>';
+  }).join('');
+  var score = passwordStrength(value);
+  Array.prototype.forEach.call($('pwMeter').children, function (bar, i) {
+    bar.setAttribute('data-on', String(i < score));
+  });
+}
+
+function authError(message) {
+  $('authError').innerHTML = '<div class="alert alert-danger">' + escapeHtml(message) + '</div>';
+}
+
+function submitAuth(event) {
+  event.preventDefault();
+  var email = $('email').value.trim();
+  var password = $('password').value;
+  var button = $('authSubmit');
+
+  var problem = signupEmailProblem(email);
+  if (problem) return authError(problem);
+  if (mode === 'signup' && !passwordIsAcceptable(password)) {
+    return authError('Your password does not meet every requirement listed below.');
+  }
+
+  button.disabled = true;
+  button.textContent = mode === 'signup' ? 'Creating account…' : 'Signing in…';
+
+  var flow = mode === 'signup'
+    /* Sign-up auto-confirms server-side (fn-pre-signup), so there is no code to
+       enter and the account can be used immediately. */
+    ? signUp(email, password).then(function () { return signIn(email, password); })
+    : signIn(email, password);
+
+  flow.then(function (tokens) {
+    session = sessionFromTokens(tokens);
+    if (!session) throw new Error('Could not read the session token');
+    saveSession();
+    enterApp();
+  }).catch(function (err) {
+    authError(err.message || 'Something went wrong');
+  }).then(function () {
+    button.disabled = false;
+    setMode(mode);
+  });
+}
+
+function signOutNow(message) {
+  clearSession();
+  $('appView').hidden = true;
+  $('noTenantView').hidden = true;
+  $('authView').hidden = false;
+  $('password').value = '';
+  if (message) authError(message);
+}
+
+/* ---------- shell ---------- */
+
+var VIEWS = [
+  { id: 'incidents', label: 'Incidents',    capability: 'view_incidents' },
+  { id: 'new',       label: 'New incident', capability: 'create_incident' },
+  { id: 'overview',  label: 'Overview',     capability: 'view_overview' },
+  { id: 'team',      label: 'Team',         capability: 'view_team' },
+  { id: 'audit',     label: 'Audit',        capability: 'view_audit' }
+];
+
+var current = 'incidents';
+
+function allowedViews() {
+  return VIEWS.filter(function (v) { return can(session.role, v.capability); });
+}
+
+function enterApp() {
+  if (!session.tenantId) {
+    /* Fail closed and say so. The authorizer denies every request from a token
+       with no tenant, so an app shell here would be a screen of failures. */
+    $('authView').hidden = true;
+    $('noTenantView').hidden = false;
+    return;
+  }
+  $('authView').hidden = true;
+  $('noTenantView').hidden = true;
+  $('appView').hidden = false;
+
+  $('tenantChip').textContent = session.tenantId;
+  $('whoami').textContent = session.email;
+  $('roleChip').textContent = roleName(session.role);
+
+  var views = allowedViews();
+  if (!views.some(function (v) { return v.id === current; })) {
+    current = views.length ? views[0].id : 'incidents';
+  }
+
+  $('tabbar').innerHTML = views.map(function (v) {
+    return '<button class="tab" role="tab" data-view="' + v.id + '" aria-selected="' +
+      (v.id === current) + '">' + escapeHtml(v.label) + '</button>';
+  }).join('');
+  Array.prototype.forEach.call($('tabbar').children, function (button) {
+    button.addEventListener('click', function () { show(button.getAttribute('data-view')); });
+  });
+
+  show(current);
+}
+
+function show(id) {
+  current = id;
+  Array.prototype.forEach.call($('tabbar').children, function (b) {
+    b.setAttribute('aria-selected', String(b.getAttribute('data-view') === id));
+  });
+  var host = $('viewHost');
+  host.innerHTML = '<div class="empty">Loading…</div>';
+
+  var view = VIEWS.filter(function (v) { return v.id === id; })[0];
+  if (view && !can(session.role, view.capability)) {
+    /* Reachable only by tampering, but it must still refuse rather than render. */
+    host.innerHTML = '<div class="card"><div class="alert alert-warning">' +
+      escapeHtml(capabilityDenialReason(session.role, view.capability)) + '</div></div>';
+    return;
+  }
+
+  ({
+    incidents: renderIncidents,
+    new: renderNewIncident,
+    overview: renderOverview,
+    team: renderTeam,
+    audit: renderAudit
+  }[id] || renderIncidents)(host);
+}
+
+function failure(host, err) {
+  host.innerHTML = '<div class="card"><div class="alert alert-danger">' +
+    escapeHtml(err.message || 'Could not load this view') + '</div></div>';
+}
+
+/* ---------- incidents ---------- */
+
+function severityBadge(severity) {
+  var meta = severityMeta(severity);
+  /* Glyph and word as well as colour, so severity never depends on colour alone. */
+  return '<span class="badge badge-' + meta.tone + '"><span aria-hidden="true">' +
+    meta.glyph + '</span>' + escapeHtml(meta.label) + '<span class="sr-only"> — ' +
+    escapeHtml(meta.text) + '</span></span>';
+}
+
+function renderIncidents(host) {
+  api('/v1/alerts').then(function (data) {
+    var alerts = data.alerts || [];
+    host.innerHTML = '';
+    host.appendChild(el(
+      '<div class="view-head"><h1>Incidents</h1>' +
+      '<p>Every incident raised for ' + escapeHtml(session.tenantId) +
+      ', newest first. Diagnosis starts automatically when an incident arrives.</p></div>'
+    ));
+
+    if (!alerts.length) {
+      host.appendChild(el(
+        '<div class="card"><div class="empty"><strong>No incidents yet</strong>' +
+        'When an alert arrives on the ingestion webhook — or someone raises one here — ' +
+        'it appears in this list and diagnosis begins.</div></div>'
+      ));
+      return;
+    }
+
+    var rows = alerts.map(function (a) {
+      return '<tr data-clickable data-alert="' + escapeHtml(a.alert_id) + '" tabindex="0">' +
+        '<td>' + severityBadge(a.severity) + '</td>' +
+        '<td><strong>' + escapeHtml(a.service || '—') + '</strong><div class="meta">' +
+          escapeHtml(String(a.description || '').slice(0, 110)) + '</div></td>' +
+        '<td><code>' + escapeHtml(a.alert_id) + '</code></td>' +
+        '<td class="num">' + escapeHtml(relativeTime(Number(a.received_at) * 1000, Date.now())) + '</td>' +
+        '<td>' + escapeHtml(a.source === 'console' ? 'Raised here' : (a.source || 'unknown')) + '</td>' +
+        '</tr>';
+    }).join('');
+
+    var card = el(
+      '<div class="card"><div class="table-wrap"><table>' +
+      '<thead><tr><th>Severity</th><th>Service</th><th>Alert</th><th>Age</th><th>Source</th></tr></thead>' +
+      '<tbody>' + rows + '</tbody></table></div></div>'
+    );
+    host.appendChild(card);
+    host.appendChild(el('<div id="detail"></div>'));
+
+    var open = function (id) { renderIncidentDetail(id); };
+    Array.prototype.forEach.call(card.querySelectorAll('tr[data-alert]'), function (tr) {
+      tr.addEventListener('click', function () { open(tr.getAttribute('data-alert')); });
+      tr.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(tr.getAttribute('data-alert')); }
+      });
+    });
+  }).catch(function (err) { failure(host, err); });
+}
+
+var STAGE_LABELS = {
+  correlate_logs: 'Correlate logs',
+  correlate_config: 'Correlate config changes',
+  rag_context: 'Retrieve similar incidents',
+  generate_rca: 'Generate root cause',
+  generate_runbook: 'Generate runbook',
+  notify: 'Notify'
+};
+
+function renderIncidentDetail(alertId) {
+  var host = $('detail');
+  host.innerHTML = '<div class="card"><div class="empty">Loading incident…</div></div>';
+
+  Promise.all([
+    api('/v1/alerts/' + encodeURIComponent(alertId) + '/status'),
+    api('/v1/diagnostics/' + encodeURIComponent(alertId)).catch(function (e) {
+      /* 404 simply means the pipeline has not produced one yet. */
+      if (e.status === 404) return null;
+      throw e;
+    })
+  ]).then(function (results) {
+    var status = results[0];
+    var diag = results[1];
+    host.innerHTML = '';
+
+    /* --- pipeline --- */
+    var seen = status.stages_seen || [];
+    var order = status.stage_order || [];
+    var stages = order.map(function (name) {
+      var state = seen.indexOf(name) !== -1
+        ? (name === status.stage ? 'running' : 'done')
+        : 'pending';
+      if (status.state === 'failed' && name === status.stage) state = 'failed';
+      return { name: name, status: state === 'running' ? 'running' : (state === 'done' ? 'done' : state) };
+    });
+    var doneCount = stages.filter(function (s) { return s.status === 'done'; }).length;
+    var elapsedMs = (Number(status.received_at) ? (Date.now() - Number(status.received_at) * 1000) : 0);
+    var budgetMs = (Number(status.sla_budget_seconds) || 300) * 1000;
+    var sla = slaState(elapsedMs, budgetMs);
+
+    host.appendChild(el(
+      '<div class="card">' +
+      '<div class="row" style="justify-content:space-between">' +
+        '<h3>Diagnosis pipeline</h3>' +
+        '<span class="badge badge-' + (sla.breached ? 'danger' : (sla.tone === 'warning' ? 'warning' : 'neutral')) + '">' +
+          escapeHtml(formatElapsed(elapsedMs)) + ' / ' + escapeHtml(formatElapsed(budgetMs)) + '</span>' +
+      '</div>' +
+      '<div class="bar" role="progressbar" aria-label="Time used of the five-minute runbook budget" ' +
+        'aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + Math.round(sla.pct) + '">' +
+        '<i style="width:' + sla.pct + '%" data-tone="' + sla.tone + '"></i></div>' +
+      '<ul class="stages" style="margin-top:var(--space-3)">' +
+      stages.map(function (s) {
+        var glyph = s.status === 'done' ? '✓' : (s.status === 'running' ? '◐' : (s.status === 'failed' ? '✕' : '·'));
+        return '<li data-state="' + s.status + '"><span class="glyph" aria-hidden="true">' + glyph + '</span>' +
+          escapeHtml(STAGE_LABELS[s.name] || s.name) +
+          '<span class="sr-only"> — ' + s.status + '</span></li>';
+      }).join('') +
+      '</ul>' +
+      '<p class="help">' + doneCount + ' of ' + stages.length + ' stages complete · state: ' +
+        escapeHtml(status.state) + '</p>' +
+      '</div>'
+    ));
+
+    /* --- diagnosis --- */
+    if (diag) {
+      var steps = (diag.remediation_steps || []).map(function (s) {
+        return '<li><div class="row"><span class="badge badge-neutral">' +
+          escapeHtml(s.priority || 'P2') + '</span><span>' + richText(escapeHtml(s.text || '')) + '</span></div>' +
+          (s.command ? '<code>' + escapeHtml(s.command) + '</code>' : '') + '</li>';
+      }).join('');
+      host.appendChild(el(
+        '<div class="card"><h3>Root cause</h3>' +
+        '<p style="font-family:var(--font-display);font-size:var(--text-md)">' +
+          escapeHtml(diag.rca_summary || 'No summary produced.') + '</p>' +
+        (steps ? '<h3 style="font-size:var(--text-base);margin-top:var(--space-4)">Remediation steps</h3>' +
+          '<ul class="steps">' + steps + '</ul>' : '') +
+        '<p class="help" style="margin-top:var(--space-3)">Model ' + escapeHtml(diag.model_version || '—') +
+          ' · confidence ' + escapeHtml(String(diag.confidence == null ? '—' : diag.confidence)) + '</p>' +
+        '</div>'
+      ));
+    } else {
+      host.appendChild(el(
+        '<div class="card"><div class="empty"><strong>No diagnosis yet</strong>' +
+        'The pipeline is still running, or it stopped before producing one.</div></div>'
+      ));
+    }
+
+    /* --- approval --- */
+    if (status.runbook_id) {
+      host.appendChild(approvalCard(status));
+    }
+  }).catch(function (err) { failure(host, err); });
+}
+
+function approvalCard(status) {
+  var meta = approvalMeta(status.approval_status);
+  var allowed = can(session.role, 'approve_remediation');
+  var reason = capabilityDenialReason(session.role, 'approve_remediation');
+  var pending = status.approval_status === 'pending';
+
+  var card = el(
+    '<div class="card">' +
+    '<div class="row" style="justify-content:space-between"><h3>Remediation</h3>' +
+      '<span class="badge badge-' + (meta.tone === 'idle' ? 'neutral' : meta.tone) + '">' +
+      '<span aria-hidden="true">' + meta.glyph + '</span>' + escapeHtml(meta.text) + '</span></div>' +
+    '<p class="help">Runbook <code>' + escapeHtml(status.runbook_id) + '</code>' +
+      (status.execution_status ? ' · execution ' + escapeHtml(status.execution_status) : '') + '</p>' +
+    (pending
+      ? '<div class="alert alert-warning">Approving executes real changes on live infrastructure.</div>' +
+        (allowed
+          ? '<label class="row" style="gap:var(--space-2);margin-bottom:var(--space-3)">' +
+              '<input type="checkbox" id="ack"> <span>I have reviewed this runbook and accept the blast radius.</span>' +
+            '</label>' +
+            '<div class="row"><button class="btn btn-primary" id="approve" disabled>Approve and execute</button>' +
+            '<button class="btn btn-quiet" id="decline">Decline</button></div>'
+          /* Disabled with the reason, rather than letting the click land on a 403. */
+          : '<div class="alert alert-info">' + escapeHtml(reason) + '</div>' +
+            '<button class="btn btn-primary" disabled>Approve and execute</button>')
+      : '') +
+    '</div>'
+  );
+
+  if (pending && allowed) {
+    var ack = card.querySelector('#ack');
+    var approve = card.querySelector('#approve');
+    ack.addEventListener('change', function () { approve.disabled = !ack.checked; });
+    approve.addEventListener('click', function () { decide(status.runbook_id, 'approve', card); });
+    card.querySelector('#decline').addEventListener('click', function () {
+      decide(status.runbook_id, 'decline', card);
+    });
+  }
+  return card;
+}
+
+function decide(runbookId, action, card) {
+  Array.prototype.forEach.call(card.querySelectorAll('button'), function (b) { b.disabled = true; });
+  api('/v1/runbooks/' + encodeURIComponent(runbookId) + '/' + action, { method: 'POST' })
+    .then(function () {
+      toast(action === 'approve' ? 'Remediation approved' : 'Runbook declined');
+      show('incidents');
+    })
+    .catch(function (err) {
+      card.appendChild(el('<div class="alert alert-danger">' + escapeHtml(err.message) + '</div>'));
+    });
+}
+
+/* ---------- new incident ---------- */
+
+var SEVERITY_CHOICES = [
+  { value: 'sev1', label: 'SEV1 — Critical: customer-facing outage' },
+  { value: 'sev2', label: 'SEV2 — High: major degradation' },
+  { value: 'sev3', label: 'SEV3 — Moderate: partial or intermittent' },
+  { value: 'sev4', label: 'SEV4 — Low: minor or cosmetic' }
+];
+
+function renderNewIncident(host) {
+  host.innerHTML = '';
+  host.appendChild(el(
+    '<div class="view-head"><h1>Raise an incident</h1>' +
+    '<p>This creates a real incident in ' + escapeHtml(session.tenantId) +
+    ' and starts the diagnosis pipeline immediately, exactly as an alert from a ' +
+    'monitoring webhook would.</p></div>'
+  ));
+
+  var form = el(
+    '<form class="card" novalidate>' +
+    '<div id="newError" role="alert"></div>' +
+    '<div class="field"><label for="service">Affected service</label>' +
+      '<input class="input" id="service" required maxlength="200" placeholder="checkout-api">' +
+      '<div class="help">The service or component that is misbehaving.</div></div>' +
+    '<div class="field"><label for="severity">Severity</label>' +
+      '<select class="input" id="severity">' +
+      SEVERITY_CHOICES.map(function (s, i) {
+        return '<option value="' + s.value + '"' + (i === 1 ? ' selected' : '') + '>' +
+          escapeHtml(s.label) + '</option>';
+      }).join('') +
+      '</select></div>' +
+    '<div class="field"><label for="description">What is happening?</label>' +
+      '<textarea class="input" id="description" required maxlength="4000" ' +
+      'placeholder="Checkout API returning 5xx for about 20% of requests since 14:05."></textarea>' +
+      '<div class="help">This is the text the diagnosis is built from, so detail helps.</div></div>' +
+    '<div class="field"><label for="alertId">Reference id <span class="placeholder-note">(optional)</span></label>' +
+      '<input class="input" id="alertId" maxlength="128" placeholder="INC-4821">' +
+      '<div class="help">Letters, digits, dot, underscore, colon or hyphen. Left blank, one is generated.</div></div>' +
+    '<button class="btn btn-primary" type="submit">Raise incident</button>' +
+    '</form>'
+  );
+  host.appendChild(form);
+
+  form.addEventListener('submit', function (event) {
+    event.preventDefault();
+    var body = {
+      service: form.querySelector('#service').value.trim(),
+      severity: form.querySelector('#severity').value,
+      description: form.querySelector('#description').value.trim()
+    };
+    var ref = form.querySelector('#alertId').value.trim();
+    if (ref) body.alert_id = ref;
+
+    var errBox = form.querySelector('#newError');
+    errBox.innerHTML = '';
+    if (!body.service || !body.description) {
+      errBox.innerHTML = '<div class="alert alert-danger">A service and a description are both required.</div>';
+      return;
+    }
+
+    var submit = form.querySelector('button[type=submit]');
+    submit.disabled = true;
+    submit.textContent = 'Raising…';
+
+    api('/v1/alerts', { method: 'POST', body: body }).then(function (data) {
+      toast('Incident ' + data.alert_id + ' raised — diagnosis started');
+      show('incidents');
+    }).catch(function (err) {
+      errBox.innerHTML = '<div class="alert alert-danger">' + escapeHtml(err.message) + '</div>';
+      submit.disabled = false;
+      submit.textContent = 'Raise incident';
+    });
+  });
+}
+
+/* ---------- overview ---------- */
+
+function tile(label, value, tone, foot) {
+  return '<div class="tile"><div class="label">' + escapeHtml(label) + '</div>' +
+    '<div class="value' + (tone ? ' ' + tone : '') + '">' + escapeHtml(String(value)) + '</div>' +
+    (foot ? '<div class="foot">' + escapeHtml(foot) + '</div>' : '') + '</div>';
+}
+
+function renderOverview(host) {
+  Promise.all([api('/v1/alerts'), api('/v1/runbooks')]).then(function (results) {
+    var alerts = results[0].alerts || [];
+    var runbooks = results[1].runbooks || [];
+    var s = summarise(alerts, runbooks, Date.now());
+
+    host.innerHTML = '';
+    host.appendChild(el(
+      '<div class="view-head"><h1>Overview</h1>' +
+      '<p>Every incident in ' + escapeHtml(session.tenantId) +
+      '. The SLA figure is the five-minute runbook budget from NFR-01, measured from ' +
+      'the moment an incident arrived to the moment its runbook was ready.</p></div>'
+    ));
+
+    host.appendChild(el('<div class="tiles">' +
+      tile('Incidents', s.total, null, s.last24h + ' in the last 24 hours') +
+      tile('Awaiting a runbook', s.awaitingRunbook, s.awaitingRunbook ? 'warning' : null,
+           s.oldestOpenMs ? 'oldest ' + formatElapsed(s.oldestOpenMs) : 'nothing outstanding') +
+      tile('Awaiting approval', s.awaitingApproval, s.awaitingApproval ? 'warning' : null,
+           'a Tenant Admin must approve') +
+      tile('Within SLA', s.slaMet, 'success', 'runbook inside five minutes') +
+      tile('Missed SLA', s.slaBreached, s.slaBreached ? 'danger' : null, 'over the five-minute budget') +
+      tile('Median time to runbook',
+           s.medianRunbookMs == null ? '—' : formatElapsed(s.medianRunbookMs), null,
+           s.medianRunbookMs == null ? 'no runbooks yet' : 'across ' + s.diagnosed + ' diagnosed') +
+      '</div>'));
+
+    /* severity mix */
+    var order = ['SEV1', 'SEV2', 'SEV3', 'SEV4', 'UNKNOWN'];
+    var classFor = { SEV1: 'sev1', SEV2: 'sev2', SEV3: 'sev3', SEV4: 'sev4', UNKNOWN: 'unknown' };
+    var total = s.total || 1;
+    host.appendChild(el(
+      '<div class="card" style="margin-top:var(--space-4)"><h3>Severity mix</h3>' +
+      '<div class="sevbar">' + order.map(function (k) {
+        var n = s.bySeverity[k] || 0;
+        return n ? '<i class="' + classFor[k] + '" style="width:' + ((n / total) * 100) + '%"></i>' : '';
+      }).join('') + '</div>' +
+      '<div class="legend">' + order.map(function (k) {
+        var n = s.bySeverity[k] || 0;
+        var meta = k === 'UNKNOWN' ? { glyph: '○', text: 'Unclassified' } : severityMeta(k);
+        return '<span><span aria-hidden="true">' + meta.glyph + '</span> ' +
+          escapeHtml(k === 'UNKNOWN' ? 'Unclassified' : k) + ' · ' + n + '</span>';
+      }).join('') + '</div></div>'
+    ));
+
+    host.appendChild(el(
+      '<div class="card"><h3>Remediation outcomes</h3><div class="tiles">' +
+      tile('Approved', s.approved) +
+      tile('Declined', s.declined) +
+      tile('Executed', s.executed, s.executed ? 'success' : null) +
+      tile('Execution failed', s.executionFailed, s.executionFailed ? 'danger' : null) +
+      '</div><p class="help" style="margin-top:var(--space-3)">' +
+      s.raisedByHand + ' of ' + s.total + ' incidents were raised by a person in this console; ' +
+      'the rest arrived from a monitoring webhook.</p></div>'
+    ));
+  }).catch(function (err) { failure(host, err); });
+}
+
+/* ---------- team ---------- */
+
+function renderTeam(host) {
+  api('/v1/team').then(function (data) {
+    var members = data.members || [];
+    var mayChange = can(session.role, 'manage_roles');
+
+    host.innerHTML = '';
+    host.appendChild(el(
+      '<div class="view-head"><h1>Team</h1>' +
+      '<p>Everyone in ' + escapeHtml(session.tenantId) +
+      '. The first person to sign up from your email domain became its admin; ' +
+      'everyone since joined as an engineer.</p></div>'
+    ));
+
+    if (!mayChange) {
+      host.appendChild(el('<div class="alert alert-info">' +
+        escapeHtml(capabilityDenialReason(session.role, 'manage_roles')) + '</div>'));
+    }
+
+    var rows = members.map(function (m) {
+      var self = m.email === session.email;
+      var options = ['TenantAdmin', 'TenantEngineer', 'TenantLeadership'].map(function (r) {
+        return '<option value="' + r + '"' + (m.role === r ? ' selected' : '') + '>' +
+          escapeHtml(roleName(r)) + '</option>';
+      }).join('');
+      return '<tr>' +
+        '<td>' + escapeHtml(m.email || '—') + (self ? ' <span class="badge badge-neutral">you</span>' : '') + '</td>' +
+        '<td>' + (mayChange
+          ? '<select class="input" data-sub="' + escapeHtml(m.sub) + '" style="min-width:150px">' + options + '</select>'
+          : '<span class="badge badge-neutral">' + escapeHtml(roleName(m.role)) + '</span>') + '</td>' +
+        '<td class="num">' + escapeHtml(m.created_at ? relativeTime(Number(m.created_at) * 1000, Date.now()) : '—') + '</td>' +
+        '</tr>';
+    }).join('');
+
+    var card = el(
+      '<div class="card"><div class="table-wrap"><table>' +
+      '<thead><tr><th>Email</th><th>Role</th><th>Joined</th></tr></thead>' +
+      '<tbody>' + rows + '</tbody></table></div>' +
+      (mayChange ? '<p class="help" style="margin-top:var(--space-3)">A role change takes effect the ' +
+        'next time that person\'s session refreshes.</p>' : '') +
+      '</div>'
+    );
+    host.appendChild(card);
+
+    Array.prototype.forEach.call(card.querySelectorAll('select[data-sub]'), function (select) {
+      var was = select.value;
+      select.addEventListener('change', function () {
+        var sub = select.getAttribute('data-sub');
+        select.disabled = true;
+        api('/v1/team/' + encodeURIComponent(sub) + '/role', {
+          method: 'POST', body: { role: select.value }
+        }).then(function () {
+          toast('Role updated');
+          was = select.value;
+        }).catch(function (err) {
+          /* Put the control back where it was: the change did not happen. */
+          select.value = was;
+          toast(err.message);
+        }).then(function () { select.disabled = false; });
+      });
+    });
+  }).catch(function (err) { failure(host, err); });
+}
+
+/* ---------- audit ---------- */
+
+function renderAudit(host) {
+  api('/v1/audit').then(function (data) {
+    var entries = data.entries || [];
+    host.innerHTML = '';
+    host.appendChild(el(
+      '<div class="view-head"><h1>Audit trail</h1>' +
+      '<p>Append-only record of who did what. Refused attempts are recorded too, ' +
+      'not only successful ones.</p></div>'
+    ));
+
+    if (!entries.length) {
+      host.appendChild(el('<div class="card"><div class="empty"><strong>Nothing recorded yet</strong>' +
+        'Approvals, declines, role changes and incidents raised here all appear in this list.</div></div>'));
+      return;
+    }
+
+    host.appendChild(el(
+      '<div class="card"><div class="table-wrap"><table>' +
+      '<thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Result</th><th>Subject</th></tr></thead><tbody>' +
+      entries.map(function (e) {
+        var refused = String(e.result || '').indexOf('refused') === 0;
+        return '<tr><td class="num">' +
+          escapeHtml(e.timestamp ? relativeTime(Number(e.timestamp) * 1000, Date.now()) : '—') + '</td>' +
+          '<td>' + escapeHtml(e.actor || '—') + '</td>' +
+          '<td><code>' + escapeHtml(e.action || '—') + '</code></td>' +
+          '<td><span class="badge badge-' + (refused ? 'warning' : 'neutral') + '">' +
+            escapeHtml(e.result || '—') + '</span></td>' +
+          '<td>' + escapeHtml(e.alert_id || e.runbook_id || '—') + '</td></tr>';
+      }).join('') +
+      '</tbody></table></div></div>'
+    ));
+  }).catch(function (err) { failure(host, err); });
+}
+
+/* ---------- boot ---------- */
+
+$('tabSignIn').addEventListener('click', function () { setMode('signin'); });
+$('tabSignUp').addEventListener('click', function () { setMode('signup'); });
+$('authForm').addEventListener('submit', submitAuth);
+$('password').addEventListener('input', function (e) {
+  if (mode === 'signup') renderPasswordHelp(e.target.value);
+});
+$('signOut').addEventListener('click', function () { signOutNow(); });
+$('noTenantSignOut').addEventListener('click', function () { signOutNow(); });
+
+/* config.json is published next to this page by deploy.sh, so the API URL and
+   pool ids are deployment facts rather than anything baked in here. */
+fetch('config.json', { cache: 'no-store' })
+  .then(function (r) { return r.json(); })
+  .then(function (config) {
+    CONFIG = config;
+    if (!CONFIG.userPoolClientId || !CONFIG.adminApiUrl) {
+      throw new Error('config.json is missing the API URL or the user pool client id');
+    }
+    setMode('signin');
+
+    var stored = loadSession();
+    /* Only reuse a token with real life left in it: a minute of slack avoids
+       loading the app and immediately bouncing on a 401. */
+    if (stored && stored.idToken && stored.expMs - Date.now() > 60000) {
+      session = stored;
+      enterApp();
+    }
+  })
+  .catch(function (err) {
+    authError('This console is not configured correctly: ' + (err.message || err));
+  });
+</script>
+</body>
+</html>

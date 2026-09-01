@@ -146,7 +146,8 @@ var APPROVER_GROUP = 'TenantAdmin';
 var KNOWN_ROLES = ['TenantAdmin', 'TenantEngineer', 'TenantLeadership'];
 
 function canApprove(role) {
-  return String(role) === APPROVER_GROUP;
+  /* Delegates to the capability matrix so this and `can` cannot disagree. */
+  return can(role, 'approve_remediation');
 }
 
 function approvalBlockReason(role) {
@@ -299,6 +300,242 @@ function richText(value) {
   });
 }
 
+
+/* ---------- Role capabilities ----------
+ *
+ * Mirrors the matrix in src/layer/python/common/rbac.py so the interface can
+ * disable a control and explain why, rather than letting someone click into a
+ * 403 (design/frontend-design.md section 5).
+ *
+ * This is NOT authorisation. Every capability is checked again inside the
+ * handler, because anything the browser decides the browser can also skip; this
+ * copy exists only so the UI can be honest before the request is made.
+ * tests/test_rbac_parity.py fails if the two ever disagree. */
+var CAPABILITIES = {
+  view_incidents: ['TenantAdmin', 'TenantEngineer', 'TenantLeadership'],
+  view_diagnosis: ['TenantAdmin', 'TenantEngineer', 'TenantLeadership'],
+  view_runbooks: ['TenantAdmin', 'TenantEngineer', 'TenantLeadership'],
+  create_incident: ['TenantAdmin', 'TenantEngineer'],
+  approve_remediation: ['TenantAdmin'],
+  view_audit: ['TenantAdmin', 'TenantLeadership'],
+  view_overview: ['TenantAdmin', 'TenantLeadership'],
+  view_team: ['TenantAdmin', 'TenantLeadership'],
+  manage_integrations: ['TenantAdmin'],
+  manage_roles: ['TenantAdmin']
+};
+
+var ROLE_LABELS = {
+  TenantAdmin: 'Tenant Admins',
+  TenantEngineer: 'Tenant Engineers',
+  TenantLeadership: 'Tenant Leadership'
+};
+
+var ROLE_NAMES = {
+  TenantAdmin: 'Admin',
+  TenantEngineer: 'Engineer',
+  TenantLeadership: 'Leadership'
+};
+
+var CAPABILITY_VERBS = {
+  view_incidents: 'view incidents',
+  view_diagnosis: 'view a diagnosis',
+  view_runbooks: 'view runbooks',
+  create_incident: 'raise an incident',
+  approve_remediation: 'approve remediation',
+  view_audit: 'read the audit trail',
+  view_overview: 'see the tenant overview',
+  view_team: 'see the team',
+  manage_integrations: 'view or change integrations',
+  manage_roles: "change a teammate's role"
+};
+
+/* Throws on an unknown capability rather than returning false: a misspelling
+ * that merely denied would disable the control for everyone including admins,
+ * and look like a data problem instead of a typo. */
+function can(role, capability) {
+  var holders = CAPABILITIES[capability];
+  if (!holders) throw new Error('unknown capability: ' + capability);
+  return holders.indexOf(String(role)) !== -1;
+}
+
+function capabilityDenialReason(role, capability) {
+  if (can(role, capability)) return null;
+  var verb = CAPABILITY_VERBS[capability] || capability.replace(/_/g, ' ');
+  if (!ROLE_LABELS[role]) {
+    return 'Your session does not carry a recognised role, so you cannot ' + verb +
+      '. Sign in again.';
+  }
+  var holders = CAPABILITIES[capability].map(function (r) { return ROLE_LABELS[r] || r; });
+  return 'Only ' + holders.join(' or ') + ' may ' + verb + '.';
+}
+
+function roleName(role) {
+  return ROLE_NAMES[role] || 'No role';
+}
+
+/* ---------- Sign-up input ----------
+ *
+ * Mirrors common/tenancy.py. Tenancy is derived from the email domain, so a
+ * consumer address cannot belong to an organisation. fn-pre-signup refuses these
+ * server-side; checking here too means the form can say so before submitting
+ * rather than surfacing a Cognito error. */
+var PUBLIC_EMAIL_DOMAINS = [
+  'gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com', 'live.com',
+  'yahoo.com', 'icloud.com', 'me.com', 'aol.com', 'proton.me', 'protonmail.com',
+  'gmx.com', 'mail.com', 'yandex.com', 'zoho.com', 'qq.com'
+];
+
+function emailDomain(email) {
+  var value = String(email == null ? '' : email).trim();
+  var at = value.lastIndexOf('@');
+  if (at < 1 || at === value.length - 1) return null;
+  return value.slice(at + 1).toLowerCase() || null;
+}
+
+function isPublicEmailDomain(email) {
+  var domain = emailDomain(email);
+  return domain !== null && PUBLIC_EMAIL_DOMAINS.indexOf(domain) !== -1;
+}
+
+/* The reason this address cannot be used, or null. */
+function signupEmailProblem(email) {
+  var domain = emailDomain(email);
+  if (domain === null) return 'Enter a valid work email address.';
+  if (domain.indexOf('.') === -1) return 'Enter a valid work email address.';
+  if (PUBLIC_EMAIL_DOMAINS.indexOf(domain) !== -1) {
+    return domain + ' is a personal email provider. Use your work email so your ' +
+      'account joins your organisation.';
+  }
+  return null;
+}
+
+/* ---------- Password rules ----------
+ *
+ * Mirrors Cognito's DEFAULT password policy, which CLAUDE.md requires leaving
+ * unchanged. So this mirrors and never adds: a form demanding more than the pool
+ * enforces would reject passwords the pool would have accepted, and the person
+ * would have no way to discover which rule was ours rather than Cognito's. */
+var PASSWORD_MIN_LENGTH = 8;
+
+var PASSWORD_RULES = [
+  { id: 'length', text: 'At least ' + PASSWORD_MIN_LENGTH + ' characters',
+    test: function (v) { return v.length >= PASSWORD_MIN_LENGTH; } },
+  { id: 'lower', text: 'A lowercase letter', test: function (v) { return /[a-z]/.test(v); } },
+  { id: 'upper', text: 'An uppercase letter', test: function (v) { return /[A-Z]/.test(v); } },
+  { id: 'digit', text: 'A number', test: function (v) { return /[0-9]/.test(v); } },
+  /* Cognito's own symbol set. */
+  { id: 'symbol', text: 'A symbol',
+    test: function (v) { return /[\^$*.\[\]{}()?"!@#%&/\\,><':;|_~`=+\- ]/.test(v); } }
+];
+
+function passwordChecklist(password) {
+  var value = String(password == null ? '' : password);
+  return PASSWORD_RULES.map(function (rule) {
+    return { id: rule.id, text: rule.text, met: rule.test(value) };
+  });
+}
+
+function passwordIsAcceptable(password) {
+  return passwordChecklist(password).every(function (item) { return item.met; });
+}
+
+/* 0-5, for a meter. Deliberately just "how many rules are met" -- an entropy
+ * score would imply a judgement the pool does not actually enforce. */
+function passwordStrength(password) {
+  return passwordChecklist(password).filter(function (i) { return i.met; }).length;
+}
+
+/* ---------- Tenant overview ----------
+ *
+ * The cross-incident picture for TenantLeadership, computed from what two
+ * existing endpoints already return: GET /v1/alerts and GET /v1/runbooks. No new
+ * backend aggregation, and nothing here invents a number the API cannot support.
+ *
+ * The SLA figure is the real NFR-01 measurement: a runbook delivered within five
+ * minutes of the alert arriving. An incident with no runbook yet is counted as
+ * pending while it is inside the budget and breached once it is past it -- so a
+ * pipeline that silently never finished shows up, rather than being omitted for
+ * having no runbook to measure. */
+function summarise(incidents, runbooks, now) {
+  var at = typeof now === 'number' ? now : Date.now();
+  var list = Array.isArray(incidents) ? incidents : [];
+  var books = Array.isArray(runbooks) ? runbooks : [];
+
+  var byAlert = {};
+  books.forEach(function (rb) {
+    if (rb && rb.alert_id) byAlert[String(rb.alert_id)] = rb;
+  });
+
+  var summary = {
+    total: list.length,
+    bySeverity: { SEV1: 0, SEV2: 0, SEV3: 0, SEV4: 0, UNKNOWN: 0 },
+    raisedByHand: 0,
+    diagnosed: 0,
+    awaitingRunbook: 0,
+    awaitingApproval: 0,
+    approved: 0,
+    declined: 0,
+    executed: 0,
+    executionFailed: 0,
+    slaMet: 0,
+    slaBreached: 0,
+    slaPending: 0,
+    last24h: 0,
+    oldestOpenMs: 0,
+    runbookTimesMs: []
+  };
+
+  list.forEach(function (incident) {
+    var meta = severityMeta(incident && incident.severity);
+    var key = meta.label === 'UNKNOWN' ? 'UNKNOWN' : meta.label;
+    if (summary.bySeverity[key] === undefined) summary.bySeverity[key] = 0;
+    summary.bySeverity[key] += 1;
+
+    if (String(incident && incident.source) === 'console') summary.raisedByHand += 1;
+
+    var receivedMs = Number(incident && incident.received_at) * 1000;
+    var ageMs = isFinite(receivedMs) ? at - receivedMs : 0;
+    if (isFinite(receivedMs) && ageMs <= 24 * 60 * 60 * 1000) summary.last24h += 1;
+
+    var runbook = byAlert[String(incident && incident.alert_id)];
+
+    if (runbook) {
+      summary.diagnosed += 1;
+
+      var generatedMs = Number(runbook.generated_at) * 1000;
+      if (isFinite(receivedMs) && isFinite(generatedMs) && generatedMs >= receivedMs) {
+        var tookMs = generatedMs - receivedMs;
+        summary.runbookTimesMs.push(tookMs);
+        if (tookMs <= SLA_BUDGET_MS) summary.slaMet += 1;
+        else summary.slaBreached += 1;
+      }
+
+      if (runbook.approval_status === 'pending') summary.awaitingApproval += 1;
+      if (runbook.approval_status === 'approved') summary.approved += 1;
+      if (runbook.approval_status === 'declined') summary.declined += 1;
+      if (runbook.execution_status === 'succeeded') summary.executed += 1;
+      if (runbook.execution_status === 'failed') summary.executionFailed += 1;
+    } else {
+      summary.awaitingRunbook += 1;
+      /* No runbook yet. Inside the budget it is still pending; past it the
+       * budget has been missed whether or not one ever arrives. */
+      if (ageMs > SLA_BUDGET_MS) summary.slaBreached += 1;
+      else summary.slaPending += 1;
+      if (ageMs > summary.oldestOpenMs) summary.oldestOpenMs = ageMs;
+    }
+  });
+
+  summary.medianRunbookMs = median(summary.runbookTimesMs);
+  return summary;
+}
+
+function median(values) {
+  if (!values.length) return null;
+  var sorted = values.slice().sort(function (a, b) { return a - b; });
+  var mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : Math.round((sorted[mid - 1] + sorted[mid]) / 2);
+}
+
 /* --- triage:lib end --- */
 
 export {
@@ -318,6 +555,21 @@ export {
   slaState,
   canApprove,
   approvalBlockReason,
+  CAPABILITIES,
+  ROLE_LABELS,
+  can,
+  capabilityDenialReason,
+  roleName,
+  PUBLIC_EMAIL_DOMAINS,
+  emailDomain,
+  isPublicEmailDomain,
+  signupEmailProblem,
+  PASSWORD_MIN_LENGTH,
+  PASSWORD_RULES,
+  passwordChecklist,
+  passwordIsAcceptable,
+  passwordStrength,
+  summarise,
   isTenantMatch,
   extractIds,
   routeIntent,

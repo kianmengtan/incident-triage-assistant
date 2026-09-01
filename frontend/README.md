@@ -1,11 +1,32 @@
-# Triage — chat-first incident console (prototype)
+# Triage — the incident console
 
-A clickable front end for the Automated Technical Outage Diagnosis and Remediation
-platform described in `../docs/` and `../spec/`. It is the UI half of **FR-10**
-("allow administrators to view diagnostic analysis, recommendations and generated
-runbooks via UI or API"), which the specification otherwise covers only as an API.
+Two pages live here, and they are for different things.
 
-## Run it
+| File | What it is |
+|---|---|
+| **`app.html`** | The live application. `../deploy.sh` publishes it as `index.html`, so it is what `app_url` serves. Real Cognito sign-up and sign-in, real incidents, role-based access control, and the leadership overview. Needs `config.json` beside it, which the deploy writes. |
+| **`prototype.html`** | The offline design reference for the chat-first surface. One self-contained file that opens from disk with no server and no network calls, running on fixture data. Not deployed. |
+
+`lib/triage.mjs` is the source of truth for the logic both share — severity
+mapping, SLA arithmetic, the capability matrix, the overview aggregation. It is
+inlined into both pages by `node sync-lib.mjs`; `npm run check-sync` fails if a
+copy has drifted, and `../deploy.sh` runs that check before deploying.
+
+Together they are the UI half of **FR-10** ("allow administrators to view
+diagnostic analysis, recommendations and generated runbooks via UI or API"), which
+the specification otherwise covers only as an API.
+
+## The live app
+
+Served from CloudFront at `app_url`. Sign up with a work email — the first person
+from an email domain becomes that organisation's admin, everyone after joins as an
+engineer, and an admin promotes people to leadership from the Team screen. What
+each role can do is documented in the root `../README.md`.
+
+Locally it needs a `config.json` (API URL and user pool ids) next to it, so the
+deployed URL is the practical way to see it.
+
+## The design reference
 
 ```
 open frontend/prototype.html
@@ -13,7 +34,7 @@ open frontend/prototype.html
 
 That is the whole instruction. It is one self-contained file — no server, no `npm
 install`, no build step, no network calls, no AWS account. It runs entirely on mock
-data.
+data. Add `?state=empty` to see it with no incidents.
 
 ## What to look at
 

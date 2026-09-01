@@ -30,7 +30,7 @@ import logging
 import boto3
 from botocore.exceptions import ClientError
 
-from common import audit, config, http, integrations
+from common import audit, config, http, integrations, rbac
 from common.response import api_response
 
 logger = logging.getLogger()
@@ -40,7 +40,9 @@ _secrets = boto3.client("secretsmanager", region_name=config.REGION)
 
 # Only a TenantAdmin may change where this system sends a tenant's credentials or
 # which endpoint it will execute a runbook against.
-ADMIN_GROUP = "TenantAdmin"
+# Kept as a name for readability; common.rbac's matrix is the authority.
+ADMIN_GROUP = rbac.TENANT_ADMIN
+CAPABILITY = "manage_integrations"
 
 KNOWN_INTEGRATIONS = (
     integrations.LOG_PLATFORM,
@@ -160,7 +162,7 @@ def handler(event, context):
     if resource not in ("/v1/integrations", "/v1/integrations/{integration}"):
         return api_response(404, {"message": "not found"})
 
-    if group != ADMIN_GROUP:
+    if not rbac.can(group, CAPABILITY):
         # Audited on the write paths: which endpoint this system will hand a
         # tenant's credentials to, and which one it will execute a runbook
         # against, is exactly the kind of change an audit trail exists to show.
@@ -171,9 +173,7 @@ def handler(event, context):
                 action="integration.update",
                 result="refused_not_admin",
             )
-        return api_response(
-            403, {"message": f"only {ADMIN_GROUP} may view or change integrations"}
-        )
+        return api_response(403, {"message": rbac.denial_message(group, CAPABILITY)})
 
     if resource == "/v1/integrations":
         return api_response(200, {"integrations": _redacted(_read(tenant_id))})

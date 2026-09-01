@@ -26,7 +26,7 @@ import time
 import boto3
 from botocore.exceptions import ClientError
 
-from common import audit, config, crypto, http, integrations, tenant_scope
+from common import audit, config, crypto, http, integrations, rbac, tenant_scope
 from common.response import api_response
 
 logger = logging.getLogger()
@@ -34,7 +34,10 @@ logger.setLevel(logging.INFO)
 
 _lambda = boto3.client("lambda", region_name=config.REGION)
 
-APPROVER_GROUP = "TenantAdmin"
+# Kept as a name for readability; the authority is common.rbac's matrix, which
+# every group check in this application resolves through.
+APPROVER_GROUP = rbac.TENANT_ADMIN
+CAPABILITY = "approve_remediation"
 
 EXECUTION_SUCCEEDED = "succeeded"
 EXECUTION_FAILED = "failed"
@@ -163,7 +166,7 @@ def handler(event, context):
     if not tenant_id:
         return api_response(403, {"message": "forbidden"})
 
-    if group != APPROVER_GROUP:
+    if not rbac.can(group, CAPABILITY):
         # Audited: a refused approval attempt on live infrastructure is exactly
         # the kind of thing an audit trail exists to show.
         audit.record_audit(
@@ -173,7 +176,7 @@ def handler(event, context):
             result="refused_not_admin",
             runbook_id=runbook_id,
         )
-        return api_response(403, {"message": f"only {APPROVER_GROUP} may approve remediation"})
+        return api_response(403, {"message": rbac.denial_message(group, CAPABILITY)})
 
     table = tenant_scope.tenant_dynamodb_resource(tenant_id).Table(config.RUNBOOKS_TABLE)
     runbook = table.get_item(

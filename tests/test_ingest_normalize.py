@@ -7,6 +7,7 @@ import pytest
 from botocore.exceptions import ClientError
 
 import ingest_normalize
+from common import alerts
 
 TENANT_ID = "acme"
 SECRET = "shh-its-a-secret"
@@ -50,11 +51,15 @@ def table():
 
 @pytest.fixture
 def harness(table):
-    """Patches the three boundaries and hands back the mocks."""
+    """Patches the three boundaries and hands back the mocks.
+
+    EventBridge is patched on ``common.alerts``: the store-and-publish path is
+    shared with fn-create-incident and lives there now.
+    """
     with patch.object(
         ingest_normalize._secrets, "get_secret_value", return_value={"SecretString": SECRET}
     ), patch.object(ingest_normalize.tenant_scope, "tenant_dynamodb_resource") as resource, patch.object(
-        ingest_normalize._events, "put_events", return_value={"FailedEntryCount": 0}
+        alerts._events, "put_events", return_value={"FailedEntryCount": 0}
     ) as put_events:
         resource.return_value.Table.return_value = table
         yield {"table": table, "put_events": put_events}
@@ -90,7 +95,7 @@ def test_the_dedup_key_is_the_alert_id_alone(harness):
 
 
 def test_two_deliveries_a_second_apart_produce_the_same_key(harness):
-    with patch("ingest_normalize.time.time", side_effect=[1000, 1000, 1001, 1001]):
+    with patch("common.alerts.time.time", side_effect=[1000, 1000, 1001, 1001]):
         ingest_normalize.handler(_event(_payload()), None)
         first = harness["table"].put_item.call_args.kwargs["Item"]["sk"]
         harness["table"].put_item.reset_mock()
@@ -191,7 +196,7 @@ def test_an_unrecognised_severity_is_refused(harness):
 
 
 def test_an_oversized_body_is_refused_before_dynamodb(harness):
-    huge = json.dumps(_payload(description="x" * (ingest_normalize.MAX_BODY_BYTES + 10)))
+    huge = json.dumps(_payload(description="x" * (alerts.MAX_BODY_BYTES + 10)))
     resp = ingest_normalize.handler(_event(body=huge), None)
 
     assert resp["statusCode"] == 413
@@ -247,4 +252,4 @@ def test_an_alert_id_carrying_the_key_separator_is_rejected(harness):
 def test_a_generated_alert_id_is_always_acceptable(harness):
     resp = ingest_normalize.handler(_event(_payload(alert_id=None)), None)
     generated = json.loads(resp["body"])["alert_id"]
-    assert ingest_normalize._usable_alert_id(generated)
+    assert alerts.usable_alert_id(generated)

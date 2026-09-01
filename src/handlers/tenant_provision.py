@@ -28,7 +28,7 @@ import time
 import boto3
 from botocore.exceptions import ClientError
 
-from common import config, crypto
+from common import config, crypto, rbac, tenancy
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -37,52 +37,13 @@ _secrets = boto3.client("secretsmanager", region_name=config.REGION)
 _dynamodb = boto3.resource("dynamodb", region_name=config.REGION)
 _cognito = boto3.client("cognito-idp", region_name=config.REGION)
 
-ADMIN_GROUP = "TenantAdmin"
-MEMBER_GROUP = "TenantEngineer"
+ADMIN_GROUP = rbac.TENANT_ADMIN
+MEMBER_GROUP = rbac.TENANT_ENGINEER
 
-# A shared consumer-mail domain is not an organisation: deriving a tenant from
-# it would put every gmail.com signup in one tenant, sharing each other's
-# incidents. Those signups get no tenant, and the authorizer denies them.
-PUBLIC_EMAIL_DOMAINS = frozenset(
-    {
-        "gmail.com",
-        "googlemail.com",
-        "outlook.com",
-        "hotmail.com",
-        "live.com",
-        "yahoo.com",
-        "icloud.com",
-        "me.com",
-        "aol.com",
-        "proton.me",
-        "protonmail.com",
-        "gmx.com",
-        "mail.com",
-        "yandex.com",
-        "zoho.com",
-        "qq.com",
-    }
-)
-
-
-def tenant_id_for_email(email):
-    """Derive a stable tenant id from an email address, or None.
-
-    The domain is slugified so the result is safe as a DynamoDB partition key,
-    a Secrets Manager name component and an IAM session tag value.
-    """
-    if not email or "@" not in email:
-        return None
-    local, _, domain = email.rpartition("@")
-    # Both halves must be present: an address like "@example.com" is not one
-    # this function should derive a tenant from.
-    if not local.strip():
-        return None
-    domain = domain.strip().lower()
-    if not domain or domain in PUBLIC_EMAIL_DOMAINS:
-        return None
-    slug = re.sub(r"[^a-z0-9]+", "-", domain).strip("-")
-    return slug or None
+# Re-exported: fn-pre-signup refuses the addresses this cannot derive a tenant
+# from, so both triggers must read one list (see common.tenancy).
+PUBLIC_EMAIL_DOMAINS = tenancy.PUBLIC_EMAIL_DOMAINS
+tenant_id_for_email = tenancy.tenant_id_for_email
 
 
 def _create_secret_if_missing(name, value):
@@ -128,6 +89,38 @@ def _claim_tenant(tenant_id):
         return False
 
 
+def _record_member(tenant_id, sub, username, email, role):
+    """Write the tenant's roster row for this user.
+
+    fn-team serves the roster from these rows rather than from Cognito, because
+    ListUsers cannot filter on a custom attribute like custom:tenant_id -- finding
+    one tenant's users through Cognito would mean paging the whole pool. Keeping
+    them here also means the roster is read through the same session-tagged,
+    partition-scoped path as every other table read.
+
+    Best-effort: a user who is already confirmed and in their group is usable
+    without this row, so a failure here is logged rather than raised. It costs
+    them a line in the team list, not access.
+    """
+    table = _dynamodb.Table(config.TENANTS_TABLE)
+    try:
+        table.put_item(
+            Item={
+                "tenant_id": tenant_id,
+                "sk": f"USER#{sub}",
+                "sub": sub,
+                # What Cognito's admin APIs need; fn-team uses it rather than
+                # trusting an identifier from the URL.
+                "username": username,
+                "email": email,
+                "role": role,
+                "created_at": int(time.time()),
+            }
+        )
+    except ClientError as exc:
+        logger.error("could not record team member row for %s: %s", username, exc)
+
+
 def handler(event, context):
     user_pool_id = event["userPoolId"]
     username = event["userName"]
@@ -153,10 +146,16 @@ def handler(event, context):
             Username=username,
             UserAttributes=[{"Name": "custom:tenant_id", "Value": tenant_id}],
         )
+        role = ADMIN_GROUP if is_founder else MEMBER_GROUP
         _cognito.admin_add_user_to_group(
             UserPoolId=user_pool_id,
             Username=username,
-            GroupName=ADMIN_GROUP if is_founder else MEMBER_GROUP,
+            GroupName=role,
+        )
+        # After the group is assigned, so the stored role matches what the token
+        # will actually carry.
+        _record_member(
+            tenant_id, attrs.get("sub") or username, username, attrs.get("email"), role
         )
         logger.info(
             "provisioned %s into tenant %s as %s",

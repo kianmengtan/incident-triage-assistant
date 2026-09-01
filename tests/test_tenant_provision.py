@@ -131,11 +131,18 @@ def test_a_secret_failure_leaves_the_tenant_unclaimed_so_the_next_signup_retries
 
 
 def test_existing_secrets_are_tolerated(harness):
+    """A re-run over already-provisioned secrets still claims the tenant.
+
+    Asserts the PROFILE row specifically rather than a total put count: the
+    handler also writes a USER# roster row for fn-team, so counting calls would
+    break on an unrelated change.
+    """
     harness["secrets"].create_secret.side_effect = _exists_error()
 
     tenant_provision.handler(_event(), None)
 
-    harness["table"].put_item.assert_called_once()
+    written = [c.kwargs["Item"]["sk"] for c in harness["table"].put_item.call_args_list]
+    assert "PROFILE" in written
 
 
 def test_all_three_tenant_secrets_are_provisioned(harness):
@@ -161,3 +168,70 @@ def test_a_cognito_failure_does_not_raise_into_the_signup_flow(harness):
     result = tenant_provision.handler(_event(), None)
 
     assert result is not None
+
+
+# ------------------------------------------------------------- roster for fn-team
+
+
+def _member_rows(harness):
+    return [
+        c.kwargs["Item"]
+        for c in harness["table"].put_item.call_args_list
+        if str(c.kwargs["Item"].get("sk", "")).startswith("USER#")
+    ]
+
+
+def test_a_roster_row_is_written_so_the_team_screen_has_something_to_list(harness):
+    """fn-team cannot use Cognito ListUsers: it cannot filter on a custom
+    attribute, so finding one tenant's users would mean paging the whole pool."""
+    event = _event()
+    event["request"]["userAttributes"]["sub"] = "s-ada"
+
+    tenant_provision.handler(event, None)
+
+    rows = _member_rows(harness)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["sk"] == "USER#s-ada"
+    assert row["tenant_id"] == "acme-retail-com"
+    assert row["email"] == "ada@acme-retail.com"
+    assert row["role"] == "TenantAdmin"
+
+
+def test_the_roster_row_stores_the_username_cognito_admin_calls_need(harness):
+    """fn-team promotes a user by the stored username rather than by an
+    identifier taken from the request URL."""
+    event = _event()
+    event["request"]["userAttributes"]["sub"] = "s-ada"
+
+    tenant_provision.handler(event, None)
+
+    assert _member_rows(harness)[0]["username"] == "ada"
+
+
+def test_the_roster_row_records_engineer_for_a_later_signup(harness):
+    """The stored role has to match the group actually assigned, or the team
+    screen shows one thing and the token carries another."""
+    harness["table"].put_item.side_effect = [_conditional_failure(), None]
+    event = _event(email="bob@acme-retail.com", username="bob")
+    event["request"]["userAttributes"]["sub"] = "s-bob"
+
+    tenant_provision.handler(event, None)
+
+    assert _member_rows(harness)[0]["role"] == "TenantEngineer"
+
+
+def test_a_user_with_no_derivable_tenant_gets_no_roster_row(harness):
+    tenant_provision.handler(_event(email="someone@gmail.com"), None)
+    assert _member_rows(harness) == []
+
+
+def test_a_failed_roster_write_does_not_break_provisioning(harness):
+    """The account is already confirmed and in its group by this point; losing
+    the row costs a line in the team list, not access."""
+    harness["table"].put_item.side_effect = [None, _conditional_failure()]
+
+    event = tenant_provision.handler(_event(), None)
+
+    assert event is not None
+    harness["cognito"].admin_add_user_to_group.assert_called_once()

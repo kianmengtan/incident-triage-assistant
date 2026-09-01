@@ -82,14 +82,16 @@ the endpoint and a boolean for whether a key is set, never the key.
 - **`template.yaml`** — a single AWS SAM template provisioning:
   - API Gateway: a public, API-key-gated ingestion API (`POST /v1/alerts`)
     and an admin API behind a custom Lambda authorizer backed by Cognito
-    (diagnostics/runbook read endpoints + remediation approval).
-  - Lambda: 15 functions (ingestion/normalization, log correlation, config
+    (diagnostics/runbook reads, remediation approval, authenticated incident
+    creation, and team/role management).
+  - Lambda: 18 functions (ingestion/normalization, log correlation, config
     correlation, RAG context retrieval, RCA/remediation generation, runbook
-    generation, notifications, audit recording, tenant provisioning, the
+    generation, notifications, audit recording, tenant provisioning, sign-up
+    admission, authenticated incident creation, team/role management, the
     admin authorizer, diagnostics/runbook queries, remediation approval, and
     the S3 Vectors setup pair described below), all Python 3.13, sharing one
     Lambda Layer (`common/`) for config, tenant-scoped AWS clients,
-    encryption, Bedrock calls, and audit helpers.
+    encryption, Bedrock calls, RBAC, and audit helpers.
   - Step Functions: `diagnosis_pipeline.asl.json` orchestrates correlation →
     RAG → RCA generation → runbook generation → notification, with
     `Retry`/`Catch` at each stage and a failure path that marks the alert
@@ -140,9 +142,11 @@ the endpoint and a boolean for whether a key is set, never the key.
   here and not at `src/layer/` — pointing one level up nests the two and produces
   `/opt/python/python/common/`, which is not on `PYTHONPATH`. `requirements.txt`
   lives here for the same reason: SAM looks for the manifest inside `ContentUri`.
-- **`frontend/`** — the incident console, published by `./deploy.sh` as the page
-  `app_url` points at. See `frontend/README.md`; it runs on fixture data and says
-  so on the page.
+- **`frontend/`** — the incident console. `app.html` is the live application
+  `./deploy.sh` publishes as the page `app_url` points at; `prototype.html` is the
+  offline design reference for the chat surface and is not deployed.
+  `lib/triage.mjs` holds the logic both share and is the source of truth for the
+  copies inlined into them. See `frontend/README.md`.
 - **`design/`** — the visual reference and the front-end design specification.
 - **`statemachine/diagnosis_pipeline.asl.json`** — the Step Functions
   definition.
@@ -159,6 +163,84 @@ the endpoint and a boolean for whether a key is set, never the key.
   off vector bucket/index creation asynchronously (see above); it does not
   wait for that to finish — check the `S3VectorsAsyncSetupFunction` and
   `S3VectorsSetupFunction` CloudWatch log groups for progress/failures.
+
+## The console
+
+`frontend/app.html` is the deployed application, published as `index.html` by
+`./deploy.sh` and served from CloudFront. It is a single self-contained file: the
+shared logic in `frontend/lib/triage.mjs` is inlined into it by
+`node frontend/sync-lib.mjs`, and `npm run check-sync` (run by `deploy.sh`) fails
+the deploy if the inlined copy has drifted. Colour, type and spacing come from
+`design/reference.html`, and `frontend/test/app.test.mjs` compares the two token
+sets so they cannot silently diverge.
+
+### Signing in
+
+There is no hosted UI and no SDK. The user pool has no client secret and allows
+`USER_PASSWORD_AUTH`, so the page calls Cognito's `SignUp` and `InitiateAuth`
+directly with `fetch` and styles the form itself. The ID token becomes the
+`Authorization: Bearer` header for the admin API; a 401 triggers one silent
+`REFRESH_TOKEN_AUTH` and a retry before the session is treated as expired. Tokens
+live in `sessionStorage`, not `localStorage`, so a bearer token does not outlive
+the tab that obtained it.
+
+Two things are enforced at sign-up:
+
+- **A work email is required.** Tenancy is derived from the email domain, so a
+  consumer address cannot belong to an organisation. `fn-pre-signup` refuses those
+  domains and Cognito returns the message to the form, which also checks the same
+  list client-side so the refusal appears before submitting.
+- **Roles are not self-selected.** The first person to sign up from a domain
+  becomes its `TenantAdmin`; everyone after joins as a `TenantEngineer`. Nothing
+  in the sign-up form can ask for more. An admin promotes teammates afterwards on
+  the Team screen, which is the only path to `TenantLeadership`.
+
+### What each role can do
+
+`common/rbac.py` is the authority; `frontend/lib/triage.mjs` mirrors it so the UI
+can disable a control and say why instead of letting the click land on a 403.
+
+| Capability | Admin | Engineer | Leadership |
+|---|:--:|:--:|:--:|
+| View incidents, diagnoses, runbooks | ✓ | ✓ | ✓ |
+| Raise an incident | ✓ | ✓ | — |
+| Approve or decline remediation | ✓ | — | — |
+| Tenant overview | ✓ | — | ✓ |
+| Audit trail | ✓ | — | ✓ |
+| See the team | ✓ | — | ✓ |
+| Change a teammate's role | ✓ | — | — |
+| View or change integrations | ✓ | — | — |
+
+Two guards in `fn-team` are worth naming, because Cognito's admin APIs are
+account-wide rather than tenant-scoped:
+
+- A role change looks the target up in the **caller's own tenant** first and
+  refuses if the row is not there. Without that lookup an admin of one tenant
+  could promote or demote a user in another.
+- The **last remaining admin cannot be demoted**. Only the first user of a tenant
+  is ever made an admin automatically, so a tenant that demoted its only one could
+  never get another and approving remediation would become permanently impossible.
+
+### Raising an incident
+
+`POST /v1/alerts` on the admin API. Unlike the public webhook, which proves itself
+with an API key plus an HMAC over the request body and only then trusts the
+`tenant_id` inside it, this endpoint takes the tenant from the authorizer context
+and ignores any `tenant_id` in the body — otherwise a signed-in user of one tenant
+could write an incident into another. Everything after validation is shared with
+the webhook through `common/alerts.py`, so a hand-raised incident is stored in the
+same shape and starts the same pipeline. Its `source` is recorded as `console` so
+the overview can distinguish the two.
+
+### The overview
+
+Built from two endpoints that already existed, `GET /v1/alerts` and
+`GET /v1/runbooks`, joined on `alert_id` — no new aggregation in the backend. The
+SLA figure is the real NFR-01 measurement: the time from an alert arriving to its
+runbook being ready, against the five-minute budget. An incident with no runbook
+counts as pending inside the budget and breached once past it, so a pipeline that
+silently stopped shows up rather than being omitted for having nothing to measure.
+`summarise()` in `frontend/lib/triage.mjs` does the arithmetic and is unit-tested.
 
 ## Resource naming
 
@@ -211,8 +293,8 @@ are isolated from each other's roles as well as their data.
 ```
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r tests/requirements-test.txt
-pytest -q                        # 260 backend tests
-(cd frontend && npm test)        # 60 console tests
+pytest -q                        # 399 backend tests
+(cd frontend && npm test)        # 111 console tests
 (cd frontend && npm run check-sync)  # the inlined logic has not drifted
 cfn-lint template.yaml           # template lint, no AWS credentials needed
 sam validate --template-file template.yaml --region ap-southeast-1 --lint
@@ -221,7 +303,9 @@ sam build --template-file template.yaml
 # What actually lands on /opt/python. Worth an eye after touching the layer:
 # cfnresponse.py and common/ must be at this root, not one level deeper.
 ls .aws-sam/build/CommonLayer/python/
-open frontend/prototype.html     # the console, on fixture data
+# app.html needs config.json beside it, so it is best seen at app_url after a
+# deploy. prototype.html opens straight from disk on fixture data.
+open frontend/prototype.html     # the offline design reference
 ```
 
 ## Deploying
@@ -236,12 +320,28 @@ authenticated REST API; it is not browsable without a Cognito ID token.
 
 ## Known limitations and deliberate trade-offs
 
-**The console is not yet wired to the live API.** It renders fixture data, and the
-page says so. `deploy.sh` publishes the deployed API and Cognito identifiers to
-`config.json` next to it, which is what a follow-on change would read. Everything
-behind the API — ingestion, the pipeline, the approval gate — is real and
-exercised by the test suites. `design/frontend-design.md` covers what wiring it up
-requires.
+**Sign-up does not verify the email address.** `fn-pre-signup` auto-confirms every
+account so signing up is a single step with no emailed code. Tenancy is derived
+from the email domain, so the consequence is real: anyone can sign up as
+`someone@bigcorp.com` and land inside BigCorp's tenant with access to its
+incidents. This was chosen knowingly for a prototype. Deleting the `PreSignUp`
+trigger from `template.yaml` restores the verification step and nothing else has
+to change — `fn-tenant-provision` runs on confirmation either way.
+
+**Client-side RBAC is presentation only.** The capability matrix in
+`frontend/lib/triage.mjs` decides which controls render, and which render disabled
+with an explanation. It is not authorisation: every capability is checked again in
+the handler through `common/rbac.py`, because anything the browser decides can be
+skipped with the developer tools open. `tests/test_rbac_parity.py` fails if the two
+copies disagree.
+
+**The console shows incidents and the overview, not the chat interface.**
+`design/frontend-design.md` specifies a chat-first console around a `POST /v1/chat`
+endpoint that does not exist. `frontend/app.html` implements the parts that run on
+endpoints that do: the incident list, incident detail with the live pipeline
+timeline, incident creation, the approval gate, the team screen and the leadership
+overview. `frontend/prototype.html` remains in the repo as the offline design
+reference for the chat surface and is no longer deployed.
 
 **Runbook documents are not encrypted with the tenant DEK.** The RCA text is, in
 the Diagnostics table; the runbook that restates it is written to S3 under bucket

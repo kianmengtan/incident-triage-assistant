@@ -393,6 +393,11 @@ Resources:
           Required: false
       LambdaConfig:
         PostConfirmation: !GetAtt TenantProvisionFunction.Arn
+        # Auto-confirms the account so signup is a single step, and refuses a
+        # consumer email domain with a message the form can show. Without it such
+        # a signup produced an account that could sign in and was then denied on
+        # every request, because no tenant could be derived for it.
+        PreSignUp: !GetAtt PreSignUpFunction.Arn
 
   UserPoolClient:
     Type: AWS::Cognito::UserPoolClient
@@ -432,6 +437,14 @@ Resources:
     Type: AWS::Lambda::Permission
     Properties:
       FunctionName: !Ref TenantProvisionFunction
+      Action: lambda:InvokeFunction
+      Principal: cognito-idp.amazonaws.com
+      SourceArn: !GetAtt UserPool.Arn
+
+  UserPoolPreSignUpInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref PreSignUpFunction
       Action: lambda:InvokeFunction
       Principal: cognito-idp.amazonaws.com
       SourceArn: !GetAtt UserPool.Arn
@@ -734,6 +747,103 @@ Resources:
               Action: sqs:SendMessage
               Resource: !GetAtt AuditWriteDlq.Arn
 
+  # Runs before the account exists. Needs no AWS permissions at all: it reads the
+  # event, refuses a consumer domain, and sets two flags on the response.
+  PreSignUpFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${NamePrefix}-fn-pre-signup'
+      LoggingConfig:
+        LogGroup: !Ref PreSignUpFunctionLogGroup
+      CodeUri: src/handlers/
+      Handler: pre_signup.handler
+
+  # The authenticated way to raise an incident, for a person using the console.
+  # The public webhook (fn-ingest-normalize) proves itself with an API key and an
+  # HMAC over the body and only then trusts the tenant_id inside it; this one
+  # takes the tenant from the authorizer context instead, so a signed-in user
+  # cannot write an incident into somebody else's tenant.
+  CreateIncidentFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${NamePrefix}-fn-create-incident'
+      LoggingConfig:
+        LogGroup: !Ref CreateIncidentFunctionLogGroup
+      CodeUri: src/handlers/
+      Handler: create_incident.handler
+      Environment:
+        Variables:
+          AUDIT_WRITE_FUNCTION_NAME: !Ref AuditWriteFunction
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: events:PutEvents
+              Resource: !Sub arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
+            - Effect: Allow
+              Action:
+                - sts:AssumeRole
+                - sts:TagSession
+              Resource: !GetAtt TenantScopedRole.Arn
+            - Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource: !GetAtt AuditWriteFunction.Arn
+      Events:
+        CreateIncident:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AdminApi
+            Path: /v1/alerts
+            Method: post
+
+  # The tenant's roster and role changes. Reads member rows from the Tenants
+  # table rather than Cognito, because ListUsers cannot filter on a custom
+  # attribute like custom:tenant_id -- finding one tenant's users through Cognito
+  # would mean paging the entire pool.
+  TeamFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${NamePrefix}-fn-team'
+      LoggingConfig:
+        LogGroup: !Ref TeamFunctionLogGroup
+      CodeUri: src/handlers/
+      Handler: team.handler
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref UserPool
+          AUDIT_WRITE_FUNCTION_NAME: !Ref AuditWriteFunction
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - sts:AssumeRole
+                - sts:TagSession
+              Resource: !GetAtt TenantScopedRole.Arn
+            # Scoped to this pool by ARN. Unlike fn-tenant-provision and
+            # fn-pre-signup, this function is not one of the pool's triggers, so
+            # a GetAtt on the pool here closes no dependency cycle.
+            - Effect: Allow
+              Action:
+                - cognito-idp:AdminAddUserToGroup
+                - cognito-idp:AdminRemoveUserFromGroup
+                - cognito-idp:AdminListGroupsForUser
+              Resource: !GetAtt UserPool.Arn
+            - Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource: !GetAtt AuditWriteFunction.Arn
+      Events:
+        ListTeam:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AdminApi
+            Path: /v1/team
+            Method: get
+        ChangeRole:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AdminApi
+            Path: /v1/team/{userSub}/role
+            Method: post
+
   TenantProvisionFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -1013,6 +1123,21 @@ Resources:
               # Cache the verified result. This was 0, so the authorizer re-ran
               # on every single request.
               ReauthorizeEvery: 300
+      # A 401 from the authorizer is generated by API Gateway, not by a Lambda, so
+      # it carries none of the CORS headers common.response adds. Without these
+      # the browser reports an opaque CORS failure instead of a 401, and the
+      # console cannot tell "your session expired" from "the API is down".
+      GatewayResponses:
+        DEFAULT_4XX:
+          ResponseParameters:
+            Headers:
+              Access-Control-Allow-Origin: "'*'"
+              Access-Control-Allow-Headers: "'Authorization,Content-Type'"
+        DEFAULT_5XX:
+          ResponseParameters:
+            Headers:
+              Access-Control-Allow-Origin: "'*'"
+              Access-Control-Allow-Headers: "'Authorization,Content-Type'"
 
   AuthorizerInvokePermission:
     Type: AWS::Lambda::Permission
@@ -1313,6 +1438,30 @@ Resources:
     UpdateReplacePolicy: Delete
     Properties:
       LogGroupName: !Sub '${NamePrefix}-fn-trigger-remediation-logs'
+      RetentionInDays: 14
+
+  PreSignUpFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub '${NamePrefix}-fn-pre-signup-logs'
+      RetentionInDays: 14
+
+  CreateIncidentFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub '${NamePrefix}-fn-create-incident-logs'
+      RetentionInDays: 14
+
+  TeamFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub '${NamePrefix}-fn-team-logs'
       RetentionInDays: 14
 
   # ---------------------------------------------------------------------

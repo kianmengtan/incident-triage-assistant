@@ -20,7 +20,7 @@ from boto3.dynamodb.conditions import Attr, Key
 from botocore.exceptions import ClientError
 from cryptography.fernet import InvalidToken
 
-from common import config, crypto, progress, tenant_scope
+from common import config, crypto, progress, rbac, tenant_scope
 from common.response import api_response
 
 logger = logging.getLogger()
@@ -31,9 +31,10 @@ logger.setLevel(logging.INFO)
 PAGE_SIZE = 50
 MAX_PAGES = 20
 
-# Reading the audit trail is a review activity, so leadership gets it as well as
-# admins — and it is the only thing the TenantLeadership group currently confers.
-AUDIT_READERS = ("TenantAdmin", "TenantLeadership")
+# Who may read the audit trail is decided by common.rbac's matrix, alongside
+# every other group check. Leadership holds it because reading the trail is a
+# review activity rather than an operational one.
+AUDIT_CAPABILITY = "view_audit"
 
 
 def _tenant_id(event):
@@ -296,10 +297,8 @@ def handler(event, context):
 
     if resource == "/v1/audit":
         group = (event.get("requestContext", {}).get("authorizer") or {}).get("group")
-        if group not in AUDIT_READERS:
-            return api_response(
-                403, {"message": f"audit access is restricted to {' and '.join(AUDIT_READERS)}"}
-            )
+        if not rbac.can(group, AUDIT_CAPABILITY):
+            return api_response(403, {"message": rbac.denial_message(group, AUDIT_CAPABILITY)})
         return api_response(
             200,
             {
