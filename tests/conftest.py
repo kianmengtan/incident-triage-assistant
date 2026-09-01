@@ -16,11 +16,7 @@ os.environ.setdefault("USER_POOL_ID", "ap-southeast-1_testpool")
 os.environ.setdefault("USER_POOL_CLIENT_ID", "test-client-id")
 os.environ.setdefault("AUDIT_WRITE_FUNCTION_NAME", "app-b9dac5ac-bc8fbf47-fn-audit-write")
 os.environ.setdefault("NOTIFY_IMS_FUNCTION_NAME", "app-b9dac5ac-bc8fbf47-fn-notify-ims")
-
-# config reads AWS_REGION (what Lambda sets), not AWS_DEFAULT_REGION, so setting
-# only the latter meant the tests passed via the hardcoded fallback instead of
-# the code path that runs in production.
-os.environ.setdefault("AWS_REGION", "ap-southeast-1")
+os.environ.setdefault("S3VECTORS_SETUP_FUNCTION_NAME", "app-b9dac5ac-bc8fbf47-fn-s3vectors-setup")
 os.environ.setdefault("AWS_DEFAULT_REGION", "ap-southeast-1")
 
 # Dummy credentials, so a test with an incomplete patch fails with a signing

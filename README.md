@@ -83,14 +83,13 @@ the endpoint and a boolean for whether a key is set, never the key.
   - API Gateway: a public, API-key-gated ingestion API (`POST /v1/alerts`)
     and an admin API behind a custom Lambda authorizer backed by Cognito
     (diagnostics/runbook read endpoints + remediation approval).
-  - Lambda: 16 functions (ingestion/normalization, log correlation, config
+  - Lambda: 15 functions (ingestion/normalization, log correlation, config
     correlation, RAG context retrieval, RCA/remediation generation, runbook
-    generation, notifications, IMS push, audit recording, tenant provisioning,
-    tenant integration settings, the admin authorizer, diagnostics/runbook
-    queries, remediation approval, pipeline-failure marking, and an S3 Vectors
-    setup custom resource), all Python 3.13, sharing one Lambda Layer
-    (`common/`) for config, tenant-scoped AWS clients, encryption, Bedrock
-    calls, progress reporting, and audit helpers.
+    generation, notifications, audit recording, tenant provisioning, the
+    admin authorizer, diagnostics/runbook queries, remediation approval, and
+    the S3 Vectors setup pair described below), all Python 3.13, sharing one
+    Lambda Layer (`common/`) for config, tenant-scoped AWS clients,
+    encryption, Bedrock calls, and audit helpers.
   - Step Functions: `diagnosis_pipeline.asl.json` orchestrates correlation →
     RAG → RCA generation → runbook generation → notification, with
     `Retry`/`Catch` at each stage and a failure path that marks the alert
@@ -103,24 +102,26 @@ the endpoint and a boolean for whether a key is set, never the key.
   - DynamoDB: Tenants, Alerts, Diagnostics, Runbooks, and AuditTrail tables,
     all partitioned by `tenant_id` with a 6-month TTL on audit records.
   - S3: context-cache, runbooks, and audit-export buckets, plus an
-    `app-b9dac5ac-bc8fbf47-vectors` S3 Vectors bucket/index (provisioned via
-    a custom resource, since S3 Vectors has no native CloudFormation type).
-  - EventBridge, SQS, SNS: alert event bus with three single-purpose dead-letter
-    queues — undispatched alerts, failed pipeline executions, and unwritable
-    audit records — plus SNS topics for runbook-ready notifications and ops
-    alarms. The ops alarm carries identifiers only; the pipeline's full state
-    goes to its DLQ, where a redrive can resume from it.
-  - Cognito: a user pool with a server-set `tenant_id` custom attribute (not
-    client-writable), self-signup, `TenantAdmin`/`TenantEngineer`/
-    `TenantLeadership` groups, and a `PostConfirmation` trigger that derives the
-    tenant, provisions its secrets and then its profile row (in that order, so a
-    failed secret cannot leave a tenant permanently half-provisioned), and puts
-    the tenant's first user in `TenantAdmin`.
-  - CloudFront + S3: the console at `app_url`, served through an Origin Access
-    Control from an SSE-S3 bucket.
-  - CloudWatch: one log group per function, owned by the stack with a 14-day
-    retention, plus SLA and failure alarms whose thresholds sit inside the
-    limits of what they measure.
+    `app-b9dac5ac-bc8fbf47-vectors` S3 Vectors bucket/index. S3 Vectors has no
+    native CloudFormation resource type, and bucket/index creation can run
+    long enough to blow past CloudFormation's stack-operation timeout — so
+    it is never provisioned as a CFN custom resource. Instead:
+    `S3VectorsSetupFunction` does the actual `s3vectors` API calls
+    (idempotent create/get, same pattern as `deploy.sh`'s ECR handling), and
+    `S3VectorsAsyncSetupFunction` invokes it in response to a message on the
+    `S3VectorsSetupTopic` SNS topic. `deploy.sh` publishes that message after
+    `sam deploy` returns, so the stack finishes in minutes regardless of how
+    long the vector bucket/index takes; RAG handlers that read/write vectors
+    work once that background setup completes. `destroy.sh` invokes
+    `S3VectorsSetupFunction` directly with a delete action before tearing
+    down the stack, since CloudFormation no longer owns that resource's
+    lifecycle either.
+  - EventBridge, SQS, SNS: alert event bus with a buffering queue + DLQ, an
+    SNS topic for runbook-ready notifications, and the `S3VectorsSetupTopic`
+    described above.
+  - Cognito: a user pool with a `tenant_id` custom attribute, self-signup,
+    `TenantAdmin`/`TenantEngineer` groups, and a `PostConfirmation` trigger
+    that provisions the tenant's DynamoDB row and per-tenant secrets.
   - Secrets Manager: per-tenant webhook HMAC secret, integration
     credentials, and encryption key, all under the
     `app-b9dac5ac-bc8fbf47-` prefix.
@@ -143,40 +144,19 @@ the endpoint and a boolean for whether a key is set, never the key.
 - **`design/`** — the visual reference and the front-end design specification.
 - **`statemachine/diagnosis_pipeline.asl.json`** — the Step Functions
   definition.
-- **`tests/`** — 260 pytest tests. Most mock every AWS call and cover ingestion
-  dedup and HMAC validation, `alert_id` validation, the SSRF guard's two halves,
-  token verification and its bypass cases, tenant derivation, the per-tenant
-  encryption boundary, the exactly-once approval claim, audit append-only
-  behaviour, the integration settings API, progress recording, model output that
-  misbehaves, and tenant-scoped query enforcement. Run with `pytest -q`.
-  The console has 60 of its own: `cd frontend && npm test`.
-
-  It also asserts the layer's packaging: that the layer's import root has no
-  nested `python/` directory, that every module the handlers import from the layer
-  sits directly in it, that the pip manifest is inside `ContentUri`, and that
-  `conftest.py`'s `sys.path` entry is the same directory the runtime will use.
-  That last one matters because the tests putting `src/layer/python` on the path
-  directly is precisely what let a mispackaged layer pass every test.
-
-  `tests/test_template_contract.py` is different in kind and worth knowing about.
-  Unit tests that mock boto3 cannot see the deployed topology, so a handler can
-  serve a route API Gateway does not expose, or query an index its role cannot
-  read, with every test green. That test runs the real SAM transform and asserts
-  the generated stack against the handler source: no circular dependencies, every
-  dispatched route exposed, every function that can reach `common.tenant_scope`
-  holding `sts:AssumeRole` + `sts:TagSession`, every queried GSI covered by an IAM
-  grant, every state-machine target invokable, and a permissions boundary on every
-  role. It needs `aws-sam-translator`, which is why that is now a test
-  requirement — `cfn-lint` does not transform the template without it, so a clean
-  lint says nothing about any of the above.
+- **`tests/`** — pytest unit tests (mocking all AWS calls) covering
+  ingestion dedup/HMAC validation, tenant-scoped query enforcement,
+  admin-approval authorization, audit recording, and the S3 Vectors
+  setup/async-trigger handlers; run with `pytest tests/ -q` (25 tests, all
+  passing).
 - **`deploy.sh`** / **`destroy.sh`** — idempotent build/deploy and teardown
-  scripts using `sam build`/`sam deploy` against a self-managed artifacts bucket
-  (`app-b9dac5ac-bc8fbf47-artifacts`). `deploy.sh` runs both test suites first,
-  publishes the console, and writes `outputs.json` with `app_url` pointing at the
-  CloudFront console; it exits non-zero rather than writing an empty `app_url`.
-  `destroy.sh` reads the stack's buckets rather than hardcoding them, removes the
-  artifacts bucket and per-tenant secrets that CloudFormation never owned, and
-  verifies the S3 Vectors bucket is actually gone.
+  scripts using `sam build`/`sam deploy` against a self-managed artifacts
+  bucket (`app-b9dac5ac-bc8fbf47-artifacts`), writing `outputs.json`
+  (including `app_url`, the admin API's base URL) on success. `deploy.sh`
+  also publishes to `S3VectorsSetupTopic` after a successful deploy to kick
+  off vector bucket/index creation asynchronously (see above); it does not
+  wait for that to finish — check the `S3VectorsAsyncSetupFunction` and
+  `S3VectorsSetupFunction` CloudWatch log groups for progress/failures.
 
 ## Bedrock models used
 

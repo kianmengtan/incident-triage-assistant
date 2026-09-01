@@ -1,25 +1,13 @@
-"""Custom::S3VectorsSetup
+"""S3 Vectors bucket/index setup.
 
-CloudFormation custom-resource Lambda. S3 Vectors has no native CloudFormation
-resource type, so the vector bucket and index are created here idempotently via
-the s3vectors API.
-
-Everything below is shaped by one rule: **this function must always answer
-CloudFormation.** A custom resource that raises before it can respond does not
-fail the stack quickly — CloudFormation simply waits for a reply that never
-comes, for an hour by default, and reports a timeout that names no cause.
-
-That is what used to happen. The boto3 s3vectors client was constructed at
-module scope, so on any environment whose botocore lacked the s3vectors service
-model it raised UnknownServiceError at import: the handler never ran, no
-try/except could catch it, and the deploy stalled. So:
-
-* module scope does nothing that can fail — standard library and config only;
-* the client is built inside the handler, where a failure is catchable;
-* the handler catches BaseException and reports FAILED with the reason;
-* a Delete always reports SUCCESS, because a failed Delete response wedges the
-  stack in DELETE_FAILED, and destroy.sh checks for and removes a surviving
-  vector bucket anyway.
+S3 Vectors is not a native CloudFormation resource type, and creating the
+vector bucket/index can take far longer than CloudFormation's stack-operation
+timeout allows. So this Lambda is invoked directly (via S3VectorsAsyncSetupFunction,
+triggered by an SNS message published after the stack finishes deploying)
+rather than as a CloudFormation custom resource. It still supports the
+legacy CFN custom-resource event shape (detected by the presence of
+"ResponseURL") for backward compatibility, but that path is no longer wired
+up in template.yaml.
 """
 import logging
 
@@ -114,32 +102,24 @@ def _delete(s3vectors):
 
 
 def handler(event, context):
-    request_type = (event or {}).get("RequestType")
-    # Stable across Create and Update, so an Update does not make CloudFormation
-    # issue a Delete for a replaced physical id.
-    physical_id = f"{config.VECTOR_BUCKET}/{config.VECTOR_INDEX}"
+    if "ResponseURL" in event:
+        request_type = event.get("RequestType")
+        physical_id = f"{config.VECTOR_BUCKET}/{config.VECTOR_INDEX}"
+        try:
+            if request_type in ("Create", "Update"):
+                _ensure_bucket()
+                _ensure_index()
+            elif request_type == "Delete":
+                _delete()
+            cfnresponse.send(event, context, cfnresponse.SUCCESS, {}, physical_id)
+        except Exception as exc:  # noqa: BLE001 - must always signal CFN, never hang the stack
+            cfnresponse.send(event, context, cfnresponse.FAILED, {"Error": str(exc)}, physical_id)
+        return None
 
-    try:
-        s3vectors = _client()
-        if request_type in ("Create", "Update"):
-            _ensure_bucket(s3vectors)
-            _ensure_index(s3vectors)
-        elif request_type == "Delete":
-            _delete(s3vectors)
-        cfnresponse.send(event, context, cfnresponse.SUCCESS, {}, physical_id)
-    except BaseException as exc:  # noqa: BLE001 - must always signal CloudFormation
-        logger.exception("%s failed", request_type)
-        if request_type == "Delete":
-            # Reporting FAILED on a Delete leaves the stack in DELETE_FAILED and
-            # needs manual intervention. destroy.sh verifies the vector bucket is
-            # gone and removes it directly, so SUCCESS here is both safe and the
-            # only outcome that lets a teardown finish.
-            cfnresponse.send(
-                event, context, cfnresponse.SUCCESS, {}, physical_id,
-                reason=f"delete reported success despite {type(exc).__name__}; see logs",
-            )
-        else:
-            cfnresponse.send(
-                event, context, cfnresponse.FAILED, {}, physical_id,
-                reason=f"{type(exc).__name__}: {exc}"[:1000],
-            )
+    action = event.get("action", "create")
+    if action == "delete":
+        _delete()
+    else:
+        _ensure_bucket()
+        _ensure_index()
+    return {"vectorBucket": config.VECTOR_BUCKET, "vectorIndex": config.VECTOR_INDEX, "action": action}

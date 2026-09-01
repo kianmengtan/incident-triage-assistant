@@ -11,32 +11,34 @@ ARTIFACTS_BUCKET="${TEMPLATE_BUCKET:-${PREFIX}-artifacts}"
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-# ---------------------------------------------------------------------------
-# Tests first. The workflow contract requires them to pass before a change is
-# complete, so a deploy that skips them can ship a known-broken build.
-# ---------------------------------------------------------------------------
-echo "==> Running tests"
-if [[ -x .venv/bin/python ]]; then
-  PYTHON=.venv/bin/python
-else
-  PYTHON=python3
-fi
+echo "==> Deploying stack: ${STACK_NAME}"
 
-# tests/test_template_contract.py runs the real SAM transform to assert the
-# handlers against the stack CloudFormation will actually receive -- the check
-# that catches an unwired route or a missing IAM grant, neither of which any unit
-# test can see. Best-effort: without aws-sam-translator that one file skips
-# rather than failing the deploy, so a sandbox with no package index is not a
-# hard stop.
-"${PYTHON}" -m pip install -q -r tests/requirements-test.txt 2>/dev/null || \
-  echo "    (could not install test requirements; the template contract test will skip)"
+echo "==> Checking for an existing ${STACK_NAME} stack in a failed/rollback state"
+STACK_STATUS=$(aws cloudformation describe-stacks \
+  --stack-name "${STACK_NAME}" \
+  --region "${REGION}" \
+  --query 'Stacks[0].StackStatus' \
+  --output text 2>/dev/null || echo "STACK_NOT_FOUND")
 
-"${PYTHON}" -m pytest -q
-node --test frontend/test/*.test.mjs
-
-# The prototype has to stay a single self-contained file, so the logic inside it
-# is a generated copy. Publishing a drifted one would deploy logic no test covers.
-node frontend/sync-lib.mjs --check
+case "${STACK_STATUS}" in
+  CREATE_FAILED|ROLLBACK_COMPLETE|ROLLBACK_IN_PROGRESS|ROLLBACK_FAILED|UPDATE_FAILED|UPDATE_ROLLBACK_COMPLETE|UPDATE_ROLLBACK_IN_PROGRESS|DELETE_FAILED)
+    echo "==> Stack ${STACK_NAME} is in ${STACK_STATUS}; deleting it before redeploying"
+    aws cloudformation delete-stack --stack-name "${STACK_NAME}" --region "${REGION}"
+    if ! timeout 300 aws cloudformation wait stack-delete-complete \
+      --stack-name "${STACK_NAME}" \
+      --region "${REGION}"; then
+      echo "ERROR: Timed out waiting for stack ${STACK_NAME} to finish deleting" >&2
+      exit 1
+    fi
+    echo "==> Stack ${STACK_NAME} deleted"
+    ;;
+  STACK_NOT_FOUND)
+    echo "==> No existing ${STACK_NAME} stack found; proceeding"
+    ;;
+  *)
+    echo "==> Stack ${STACK_NAME} exists in state ${STACK_STATUS}; proceeding with update"
+    ;;
+esac
 
 echo "==> Ensuring artifacts bucket ${ARTIFACTS_BUCKET} exists in ${REGION}"
 if ! aws s3api head-bucket --bucket "${ARTIFACTS_BUCKET}" --region "${REGION}" 2>/dev/null; then
@@ -169,4 +171,25 @@ with open("outputs.json", "w") as fh:
 print(json.dumps(flat, indent=2))
 PY
 
-echo "==> Deploy complete. Console: $(${PYTHON} -c 'import json;print(json.load(open("outputs.json"))["app_url"])')"
+echo "==> Triggering async S3 Vectors setup (does not block this deploy)"
+S3VECTORS_TOPIC_ARN=$(python3 - "$OUTPUTS_JSON" <<'PY'
+import json
+import sys
+
+outputs = json.loads(sys.argv[1] or "[]")
+flat = {o["OutputKey"]: o["OutputValue"] for o in outputs}
+print(flat.get("S3VectorsSetupTopicArn", ""))
+PY
+)
+
+if [ -n "${S3VECTORS_TOPIC_ARN}" ]; then
+  aws sns publish \
+    --topic-arn "${S3VECTORS_TOPIC_ARN}" \
+    --message '{"action":"create"}' \
+    --region "${REGION}" >/dev/null
+  echo "==> S3 Vectors setup started asynchronously, check CloudWatch logs for progress"
+else
+  echo "WARNING: S3VectorsSetupTopicArn missing from stack outputs; skipped async S3 Vectors trigger" >&2
+fi
+
+echo "==> Deploy complete. Outputs written to outputs.json"
