@@ -28,7 +28,6 @@ Globals:
         RUNBOOK_READY_TOPIC_ARN: !Ref RunbookReadyTopic
         OPS_ALARMS_TOPIC_ARN: !Ref OpsAlarmsTopic
         TENANT_SCOPED_ROLE_ARN: !GetAtt TenantScopedRole.Arn
-        USER_POOL_ID: ''
 
 Resources:
 
@@ -39,7 +38,16 @@ Resources:
     Type: AWS::Serverless::LayerVersion
     Properties:
       LayerName: app-b9dac5ac-bc8fbf47-layer-common
-      ContentUri: src/layer/
+      # src/layer/python/, NOT src/layer/. With a BuildMethod set, SAM treats
+      # ContentUri as the build source and adds the layer's own `python/` prefix
+      # itself -- so pointing at src/layer/ nested the repo's python/ directory
+      # inside SAM's, producing /opt/python/python/common/. Only /opt/python is on
+      # PYTHONPATH, so every function failed at import with "No module named
+      # 'common'" (and the custom resource with "No module named 'cfnresponse'"),
+      # after a build and a deploy that both reported success. requirements.txt
+      # lives in the same directory because SAM looks for the manifest inside
+      # ContentUri.
+      ContentUri: src/layer/python/
       CompatibleRuntimes:
         - python3.13
       RetentionPolicy: Delete
@@ -51,6 +59,8 @@ Resources:
   # ---------------------------------------------------------------------
   TenantsTable:
     Type: AWS::DynamoDB::Table
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
     Properties:
       TableName: app-b9dac5ac-bc8fbf47-tenants
       BillingMode: PAY_PER_REQUEST
@@ -69,6 +79,8 @@ Resources:
 
   AlertsTable:
     Type: AWS::DynamoDB::Table
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
     Properties:
       TableName: app-b9dac5ac-bc8fbf47-alerts
       BillingMode: PAY_PER_REQUEST
@@ -77,16 +89,32 @@ Resources:
           AttributeType: S
         - AttributeName: sk
           AttributeType: S
+        - AttributeName: received_at
+          AttributeType: N
       KeySchema:
         - AttributeName: tenant_id
           KeyType: HASH
         - AttributeName: sk
           KeyType: RANGE
+      GlobalSecondaryIndexes:
+        # The base sort key is alert#{alert_id}, which deduplicates correctly but
+        # orders lexicographically by id. The incident rail needs newest-first, so
+        # chronological ordering comes from here instead.
+        - IndexName: received-at-index
+          KeySchema:
+            - AttributeName: tenant_id
+              KeyType: HASH
+            - AttributeName: received_at
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
       SSESpecification:
         SSEEnabled: true
 
   DiagnosticsTable:
     Type: AWS::DynamoDB::Table
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
     Properties:
       TableName: app-b9dac5ac-bc8fbf47-diagnostics
       BillingMode: PAY_PER_REQUEST
@@ -105,6 +133,8 @@ Resources:
 
   RunbooksTable:
     Type: AWS::DynamoDB::Table
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
     Properties:
       TableName: app-b9dac5ac-bc8fbf47-runbooks
       BillingMode: PAY_PER_REQUEST
@@ -134,6 +164,8 @@ Resources:
 
   AuditTrailTable:
     Type: AWS::DynamoDB::Table
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
     Properties:
       TableName: app-b9dac5ac-bc8fbf47-audit-trail
       BillingMode: PAY_PER_REQUEST
@@ -158,6 +190,8 @@ Resources:
   # ---------------------------------------------------------------------
   ContextCacheBucket:
     Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
     Properties:
       BucketName: !Sub app-b9dac5ac-bc8fbf47-context-cache-${AWS::AccountId}
       BucketEncryption:
@@ -177,6 +211,8 @@ Resources:
 
   RunbooksBucket:
     Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
     Properties:
       BucketName: !Sub app-b9dac5ac-bc8fbf47-runbooks-${AWS::AccountId}
       BucketEncryption:
@@ -191,6 +227,8 @@ Resources:
 
   AuditExportsBucket:
     Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
     Properties:
       BucketName: !Sub app-b9dac5ac-bc8fbf47-audit-exports-${AWS::AccountId}
       BucketEncryption:
@@ -211,6 +249,8 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: app-b9dac5ac-bc8fbf47-fn-s3vectors-setup
+      LoggingConfig:
+        LogGroup: !Ref S3VectorsSetupFunctionLogGroup
       CodeUri: src/handlers/
       Handler: s3vectors_setup.handler
       Timeout: 60
@@ -230,24 +270,50 @@ Resources:
     Type: Custom::S3VectorsSetup
     Properties:
       ServiceToken: !GetAtt S3VectorsSetupFunction.Arn
+      # Bounds the one way this can genuinely stall a deploy. The work itself is
+      # four idempotent API calls behind a 60s function timeout, and the handler
+      # signals CloudFormation on both its success and failure paths — but if the
+      # function dies BEFORE the handler runs (an import error, a missing layer),
+      # CloudFormation receives no response at all and waits an hour by default.
+      ServiceTimeout: 120
 
   # ---------------------------------------------------------------------
   # SQS buffer queue + DLQ
   # ---------------------------------------------------------------------
-  AlertBufferDlq:
+  # Three queues, one job each. There used to be a "buffer" queue that nothing
+  # consumed — so alerts accumulated in it and expired — sharing a DLQ with
+  # pipeline failures, which made that DLQ unredrivable: the two message shapes
+  # are completely different and a consumer could not tell them apart.
+
+  # Alerts EventBridge could not hand to the state machine. This is what stops a
+  # failed StartExecution from silently dropping an alert.
+  AlertDispatchDlq:
     Type: AWS::SQS::Queue
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
     Properties:
-      QueueName: app-b9dac5ac-bc8fbf47-queue-alert-buffer-dlq
+      QueueName: app-b9dac5ac-bc8fbf47-queue-alert-dispatch-dlq
       MessageRetentionPeriod: 1209600
 
-  AlertBufferQueue:
+  # Pipeline executions that failed part-way. Messages carry the full state so a
+  # redrive can resume with the context already gathered.
+  PipelineFailureDlq:
     Type: AWS::SQS::Queue
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
     Properties:
-      QueueName: app-b9dac5ac-bc8fbf47-queue-alert-buffer
-      VisibilityTimeout: 360
-      RedrivePolicy:
-        deadLetterTargetArn: !GetAtt AlertBufferDlq.Arn
-        maxReceiveCount: 3
+      QueueName: app-b9dac5ac-bc8fbf47-queue-pipeline-failure-dlq
+      MessageRetentionPeriod: 1209600
+
+  # Audit records that could not be written. A trail described as append-only
+  # cannot lose records to a failed asynchronous invoke.
+  AuditWriteDlq:
+    Type: AWS::SQS::Queue
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      QueueName: app-b9dac5ac-bc8fbf47-queue-audit-write-dlq
+      MessageRetentionPeriod: 1209600
 
   # ---------------------------------------------------------------------
   # SNS topics
@@ -267,6 +333,10 @@ Resources:
   # ---------------------------------------------------------------------
   UserPool:
     Type: AWS::Cognito::UserPool
+    # Deleted with the stack: destroy.sh must leave nothing behind, and the
+    # accounts in it are self-signup accounts for a prototype.
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
     Properties:
       UserPoolName: app-b9dac5ac-bc8fbf47-cognito-userpool
       MfaConfiguration: 'OFF'
@@ -279,6 +349,8 @@ Resources:
           Mutable: true
         - Name: tenant_id
           AttributeDataType: String
+          # Mutable so the PostConfirmation trigger can set it; deliberately
+          # absent from the app client's WriteAttributes so the user cannot.
           Mutable: true
           Required: false
       LambdaConfig:
@@ -293,9 +365,12 @@ Resources:
       ExplicitAuthFlows:
         - ALLOW_USER_PASSWORD_AUTH
         - ALLOW_REFRESH_TOKEN_AUTH
+      # custom:tenant_id is deliberately NOT writable. With self-signup
+      # enabled, a client-writable tenant attribute let anyone claim an existing
+      # tenant's id at signup and then read that tenant's incidents.
+      # fn-tenant-provision derives it from the verified email domain instead.
       WriteAttributes:
         - email
-        - custom:tenant_id
 
   TenantAdminGroup:
     Type: AWS::Cognito::UserPoolGroup
@@ -340,7 +415,13 @@ Resources:
           - Effect: Allow
             Principal:
               AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
-            Action: sts:AssumeRole
+            # TagSession as well as AssumeRole: tenant_scope tags each session
+            # with tenant_id, and passing session tags needs BOTH actions here
+            # and in the caller's own policy. Granting only AssumeRole made
+            # every data-plane call in the application fail with AccessDenied.
+            Action:
+              - sts:AssumeRole
+              - sts:TagSession
             Condition:
               ArnLike:
                 aws:PrincipalArn: !Sub arn:aws:iam::${AWS::AccountId}:role/app-b9dac5ac-bc8fbf47-*
@@ -358,6 +439,11 @@ Resources:
                 Resource:
                   - !GetAtt TenantsTable.Arn
                   - !GetAtt AlertsTable.Arn
+                  # The incident list is the one query that MUST use a GSI: the
+                  # base sort key is alert#{alert_id}, so chronological order can
+                  # only come from received-at-index. A Query on an index needs the
+                  # index ARN, and without it the list failed with AccessDenied.
+                  - !Sub ${AlertsTable.Arn}/index/*
                   - !GetAtt DiagnosticsTable.Arn
                   - !GetAtt RunbooksTable.Arn
                   - !Sub ${RunbooksTable.Arn}/index/*
@@ -381,6 +467,8 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: app-b9dac5ac-bc8fbf47-fn-ingest-normalize
+      LoggingConfig:
+        LogGroup: !Ref IngestNormalizeFunctionLogGroup
       CodeUri: src/handlers/
       Handler: ingest_normalize.handler
       Policies:
@@ -389,7 +477,9 @@ Resources:
               Action: events:PutEvents
               Resource: !Sub arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/default
             - Effect: Allow
-              Action: sts:AssumeRole
+              Action:
+                - sts:AssumeRole
+                - sts:TagSession
               Resource: !GetAtt TenantScopedRole.Arn
             - Effect: Allow
               Action: secretsmanager:GetSecretValue
@@ -408,13 +498,17 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: app-b9dac5ac-bc8fbf47-fn-correlate-logs
+      LoggingConfig:
+        LogGroup: !Ref CorrelateLogsFunctionLogGroup
       CodeUri: src/handlers/
-      Handler: correlate_logs.handler
+      Handler: correlate.logs_handler
       Timeout: 90
       Policies:
         - Statement:
             - Effect: Allow
-              Action: sts:AssumeRole
+              Action:
+                - sts:AssumeRole
+                - sts:TagSession
               Resource: !GetAtt TenantScopedRole.Arn
             - Effect: Allow
               Action: secretsmanager:GetSecretValue
@@ -424,13 +518,17 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: app-b9dac5ac-bc8fbf47-fn-correlate-config
+      LoggingConfig:
+        LogGroup: !Ref CorrelateConfigFunctionLogGroup
       CodeUri: src/handlers/
-      Handler: correlate_config.handler
+      Handler: correlate.config_handler
       Timeout: 90
       Policies:
         - Statement:
             - Effect: Allow
-              Action: sts:AssumeRole
+              Action:
+                - sts:AssumeRole
+                - sts:TagSession
               Resource: !GetAtt TenantScopedRole.Arn
             - Effect: Allow
               Action: secretsmanager:GetSecretValue
@@ -440,13 +538,17 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: app-b9dac5ac-bc8fbf47-fn-rag-context
+      LoggingConfig:
+        LogGroup: !Ref RagContextFunctionLogGroup
       CodeUri: src/handlers/
       Handler: rag_context.handler
       Timeout: 60
       Policies:
         - Statement:
             - Effect: Allow
-              Action: sts:AssumeRole
+              Action:
+                - sts:AssumeRole
+                - sts:TagSession
               Resource: !GetAtt TenantScopedRole.Arn
             - Effect: Allow
               Action: bedrock:InvokeModel
@@ -464,14 +566,21 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: app-b9dac5ac-bc8fbf47-fn-generate-rca
+      LoggingConfig:
+        LogGroup: !Ref GenerateRcaFunctionLogGroup
       CodeUri: src/handlers/
       Handler: generate_rca.handler
       Timeout: 60
       Policies:
         - Statement:
             - Effect: Allow
-              Action: sts:AssumeRole
+              Action:
+                - sts:AssumeRole
+                - sts:TagSession
               Resource: !GetAtt TenantScopedRole.Arn
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:app-b9dac5ac-bc8fbf47-tenant-*-dek-*
             - Effect: Allow
               Action: bedrock:InvokeModel
               Resource:
@@ -482,13 +591,17 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: app-b9dac5ac-bc8fbf47-fn-generate-runbook
+      LoggingConfig:
+        LogGroup: !Ref GenerateRunbookFunctionLogGroup
       CodeUri: src/handlers/
       Handler: generate_runbook.handler
       Timeout: 60
       Policies:
         - Statement:
             - Effect: Allow
-              Action: sts:AssumeRole
+              Action:
+                - sts:AssumeRole
+                - sts:TagSession
               Resource: !GetAtt TenantScopedRole.Arn
             - Effect: Allow
               Action: bedrock:InvokeModel
@@ -500,6 +613,8 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: app-b9dac5ac-bc8fbf47-fn-notify
+      LoggingConfig:
+        LogGroup: !Ref NotifyFunctionLogGroup
       CodeUri: src/handlers/
       Handler: notify.handler
       Policies:
@@ -507,11 +622,44 @@ Resources:
             - Effect: Allow
               Action: sns:Publish
               Resource: !Ref RunbookReadyTopic
+            # notify.handler calls progress.mark_stage, which writes through the
+            # tenant-scoped role. Without this the call failed on every
+            # invocation -- and mark_stage swallows failures by design, so the
+            # last stage of the pipeline simply never appeared in the timeline
+            # and nothing anywhere said why.
+            - Effect: Allow
+              Action:
+                - sts:AssumeRole
+                - sts:TagSession
+              Resource: !GetAtt TenantScopedRole.Arn
+
+  # Nothing used to record that a diagnosis failed. The state machine sent the
+  # failed state to a DLQ and published to the ops topic, but never touched the
+  # alert row -- so the read API's "failed" state was unreachable and a failed
+  # diagnosis showed as "diagnosing" indefinitely.
+  MarkPipelineFailedFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: app-b9dac5ac-bc8fbf47-fn-mark-pipeline-failed
+      LoggingConfig:
+        LogGroup: !Ref MarkPipelineFailedFunctionLogGroup
+      CodeUri: src/handlers/
+      Handler: notify.failure_handler
+      Timeout: 15
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - sts:AssumeRole
+                - sts:TagSession
+              Resource: !GetAtt TenantScopedRole.Arn
 
   NotifyImsFunction:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: app-b9dac5ac-bc8fbf47-fn-notify-ims
+      LoggingConfig:
+        LogGroup: !Ref NotifyImsFunctionLogGroup
       CodeUri: src/handlers/
       Handler: notify_ims.handler
       Timeout: 30
@@ -525,18 +673,35 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: app-b9dac5ac-bc8fbf47-fn-audit-write
+      LoggingConfig:
+        LogGroup: !Ref AuditWriteFunctionLogGroup
       CodeUri: src/handlers/
       Handler: audit_write.handler
+      # record_audit invokes this asynchronously, so an exception here would
+      # vanish after Lambda's internal retries with nowhere to land.
+      EventInvokeConfig:
+        MaximumRetryAttempts: 2
+        DestinationConfig:
+          OnFailure:
+            Type: SQS
+            Destination: !GetAtt AuditWriteDlq.Arn
       Policies:
         - Statement:
             - Effect: Allow
-              Action: sts:AssumeRole
+              Action:
+                - sts:AssumeRole
+                - sts:TagSession
               Resource: !GetAtt TenantScopedRole.Arn
+            - Effect: Allow
+              Action: sqs:SendMessage
+              Resource: !GetAtt AuditWriteDlq.Arn
 
   TenantProvisionFunction:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: app-b9dac5ac-bc8fbf47-fn-tenant-provision
+      LoggingConfig:
+        LogGroup: !Ref TenantProvisionFunctionLogGroup
       CodeUri: src/handlers/
       Handler: tenant_provision.handler
       Policies:
@@ -547,36 +712,128 @@ Resources:
             - Effect: Allow
               Action: secretsmanager:CreateSecret
               Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:app-b9dac5ac-bc8fbf47-tenant-*
+            # Sets custom:tenant_id, and puts the tenant's first user in
+            # TenantAdmin. Nothing else grants group membership, so without this
+            # no one could ever approve remediation.
+            # NOT !GetAtt UserPool.Arn. The pool names this function as its
+            # PostConfirmation trigger, so a GetAtt back on the pool closes a
+            # cycle through the role SAM generates for this function --
+            # UserPool -> TenantProvisionFunction -> TenantProvisionFunctionRole
+            # -> UserPool -- and CloudFormation rejects the whole stack before
+            # creating anything. A pool id is AWS-generated, so the exact ARN
+            # cannot be constructed without referencing the pool; this account
+            # holds one pool for this app and the trigger can only ever be
+            # invoked by it.
+            - Effect: Allow
+              Action:
+                - cognito-idp:AdminUpdateUserAttributes
+                - cognito-idp:AdminAddUserToGroup
+              Resource: !Sub arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/*
+
+  # The write path for per-tenant integration credentials, which had none.
+  # fn-tenant-provision creates the secret with four empty objects and nothing
+  # could ever fill them in, so on a fresh deployment both correlation stages
+  # returned "no platform configured" permanently, the IMS was never notified and
+  # every approval recorded execution_status "skipped".
+  TenantSettingsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: app-b9dac5ac-bc8fbf47-fn-tenant-settings
+      LoggingConfig:
+        LogGroup: !Ref TenantSettingsFunctionLogGroup
+      CodeUri: src/handlers/
+      Handler: tenant_settings.handler
+      Environment:
+        Variables:
+          AUDIT_WRITE_FUNCTION_NAME: !Ref AuditWriteFunction
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+                - secretsmanager:PutSecretValue
+              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:app-b9dac5ac-bc8fbf47-tenant-*-integration-creds-*
+            - Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource: !GetAtt AuditWriteFunction.Arn
+      Events:
+        ListIntegrations:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AdminApi
+            Path: /v1/integrations
+            Method: get
+        PutIntegration:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AdminApi
+            Path: /v1/integrations/{integration}
+            Method: put
+        DeleteIntegration:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AdminApi
+            Path: /v1/integrations/{integration}
+            Method: delete
 
   AuthorizerFunction:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: app-b9dac5ac-bc8fbf47-fn-authorizer
+      LoggingConfig:
+        LogGroup: !Ref AuthorizerFunctionLogGroup
       CodeUri: src/handlers/
       Handler: authorizer.handler
       Environment:
         Variables:
           USER_POOL_ID: !Ref UserPool
-      Policies:
-        - Statement:
-            - Effect: Allow
-              Action:
-                - cognito-idp:GetUser
-                - cognito-idp:AdminListGroupsForUser
-              Resource: !GetAtt UserPool.Arn
+          # Required: the audience check against this client id is what stops a
+          # token minted by any other Cognito user pool from being accepted.
+          USER_POOL_CLIENT_ID: !Ref UserPoolClient
+      # No IAM policy needed: the token is verified against the pool's public
+      # JWKS over HTTPS, so the authorizer makes no AWS API calls on the request
+      # path and cannot be throttled by Cognito.
 
   QueryDiagnosticsFunction:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: app-b9dac5ac-bc8fbf47-fn-query-diagnostics
+      LoggingConfig:
+        LogGroup: !Ref QueryDiagnosticsFunctionLogGroup
       CodeUri: src/handlers/
       Handler: query_diagnostics.handler
       Policies:
         - Statement:
             - Effect: Allow
-              Action: sts:AssumeRole
+              Action:
+                - sts:AssumeRole
+                - sts:TagSession
               Resource: !GetAtt TenantScopedRole.Arn
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:app-b9dac5ac-bc8fbf47-tenant-*-dek-*
       Events:
+        # These three were implemented and documented in the handler and wired to
+        # nothing, so the incident list, the pipeline stage timeline and the whole
+        # audit trail answered API Gateway's "Missing Authentication Token".
+        ListAlerts:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AdminApi
+            Path: /v1/alerts
+            Method: get
+        GetAlertStatus:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AdminApi
+            Path: /v1/alerts/{alertId}/status
+            Method: get
+        ListAudit:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AdminApi
+            Path: /v1/audit
+            Method: get
         GetDiagnostic:
           Type: Api
           Properties:
@@ -606,6 +863,8 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: app-b9dac5ac-bc8fbf47-fn-trigger-remediation
+      LoggingConfig:
+        LogGroup: !Ref TriggerRemediationFunctionLogGroup
       CodeUri: src/handlers/
       Handler: trigger_remediation.handler
       Timeout: 30
@@ -616,11 +875,15 @@ Resources:
       Policies:
         - Statement:
             - Effect: Allow
-              Action: sts:AssumeRole
+              Action:
+                - sts:AssumeRole
+                - sts:TagSession
               Resource: !GetAtt TenantScopedRole.Arn
             - Effect: Allow
               Action: secretsmanager:GetSecretValue
-              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:app-b9dac5ac-bc8fbf47-tenant-*-integration-creds-*
+              Resource:
+                - !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:app-b9dac5ac-bc8fbf47-tenant-*-integration-creds-*
+                - !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:app-b9dac5ac-bc8fbf47-tenant-*-dek-*
             - Effect: Allow
               Action: lambda:InvokeFunction
               Resource:
@@ -632,6 +895,14 @@ Resources:
           Properties:
             RestApiId: !Ref AdminApi
             Path: /v1/runbooks/{runbookId}/approve
+            Method: post
+        # The UI has always had a Decline button with no endpoint behind it, so
+        # declining was a client-side state change only and never recorded.
+        DeclineRunbook:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AdminApi
+            Path: /v1/runbooks/{runbookId}/decline
             Method: post
 
   # ---------------------------------------------------------------------
@@ -683,15 +954,27 @@ Resources:
     Properties:
       Name: app-b9dac5ac-bc8fbf47-admin-api
       StageName: prod
+      Cors:
+        # The console is served from CloudFront, a different origin, so the
+        # browser preflights every call. Without this the front end cannot reach
+        # this API at all.
+        AllowOrigin: "'*'"
+        AllowHeaders: "'Authorization,Content-Type'"
+        AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
       Auth:
         DefaultAuthorizer: TenantAuthorizer
+        # An OPTIONS preflight carries no Authorization header, so authorizing it
+        # would fail CORS before the real request was ever sent.
+        AddDefaultAuthorizerToCorsPreflight: false
         Authorizers:
           TenantAuthorizer:
             FunctionArn: !GetAtt AuthorizerFunction.Arn
             Identity:
               Headers:
                 - Authorization
-              ReauthorizeEvery: 0
+              # Cache the verified result. This was 0, so the authorizer re-ran
+              # on every single request.
+              ReauthorizeEvery: 300
 
   AuthorizerInvokePermission:
     Type: AWS::Lambda::Permission
@@ -721,15 +1004,16 @@ Resources:
           InputPath: $.detail
           RetryPolicy:
             MaximumRetryAttempts: 3
-        - Id: AlertBuffer
-          Arn: !GetAtt AlertBufferQueue.Arn
-          InputPath: $.detail
+          # Without a DLQ, an alert EventBridge cannot dispatch after its retries
+          # is discarded with no record that it ever arrived.
+          DeadLetterConfig:
+            Arn: !GetAtt AlertDispatchDlq.Arn
 
-  AlertBufferQueuePolicy:
+  AlertDispatchDlqPolicy:
     Type: AWS::SQS::QueuePolicy
     Properties:
       Queues:
-        - !Ref AlertBufferQueue
+        - !Ref AlertDispatchDlq
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -737,7 +1021,7 @@ Resources:
             Principal:
               Service: events.amazonaws.com
             Action: sqs:SendMessage
-            Resource: !GetAtt AlertBufferQueue.Arn
+            Resource: !GetAtt AlertDispatchDlq.Arn
             Condition:
               ArnEquals:
                 aws:SourceArn: !GetAtt AlertReceivedRule.Arn
@@ -792,9 +1076,10 @@ Resources:
                   - !GetAtt GenerateRcaFunction.Arn
                   - !GetAtt GenerateRunbookFunction.Arn
                   - !GetAtt NotifyFunction.Arn
+                  - !GetAtt MarkPipelineFailedFunction.Arn
               - Effect: Allow
                 Action: sqs:SendMessage
-                Resource: !GetAtt AlertBufferDlq.Arn
+                Resource: !GetAtt PipelineFailureDlq.Arn
               - Effect: Allow
                 Action: sns:Publish
                 Resource: !Ref OpsAlarmsTopic
@@ -815,18 +1100,257 @@ Resources:
         GenerateRcaFunctionArn: !GetAtt GenerateRcaFunction.Arn
         GenerateRunbookFunctionArn: !GetAtt GenerateRunbookFunction.Arn
         NotifyFunctionArn: !GetAtt NotifyFunction.Arn
-        AlertBufferDlqUrl: !Ref AlertBufferDlq
+        MarkPipelineFailedFunctionArn: !GetAtt MarkPipelineFailedFunction.Arn
+        PipelineFailureDlqUrl: !Ref PipelineFailureDlq
         OpsAlarmsTopicArn: !Ref OpsAlarmsTopic
 
   # ---------------------------------------------------------------------
-  # SSM feature flag example
+  # An execution killed by the state machine's own 300s timeout runs no Catch,
+  # so the failure path never executes: nothing marked the alert failed, nothing
+  # reached the DLQ and nothing published to the ops topic. A timeout is exactly
+  # the case NFR-01 cares most about, so it is recorded from outside the
+  # execution instead. ABORTED is included because a manual stop leaves an alert
+  # in the same indefinitely-"diagnosing" state.
   # ---------------------------------------------------------------------
-  RemediationAutoApproveFlag:
-    Type: AWS::SSM::Parameter
+  ExecutionTimedOutRule:
+    Type: AWS::Events::Rule
     Properties:
-      Name: /app-b9dac5ac-bc8fbf47/feature-flags/remediation-auto-approve
-      Type: String
-      Value: 'false'
+      Name: app-b9dac5ac-bc8fbf47-rule-execution-timed-out
+      EventPattern:
+        source:
+          - aws.states
+        detail-type:
+          - Step Functions Execution Status Change
+        detail:
+          stateMachineArn:
+            - !Ref DiagnosisPipeline
+          status:
+            - TIMED_OUT
+            - ABORTED
+      Targets:
+        - Id: MarkPipelineFailed
+          Arn: !GetAtt MarkPipelineFailedFunction.Arn
+
+  ExecutionTimedOutInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref MarkPipelineFailedFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt ExecutionTimedOutRule.Arn
+
+  # ---------------------------------------------------------------------
+  # CloudWatch log groups
+  #
+  # One per function, declared explicitly for two reasons: Lambda's implicit
+  # /aws/lambda/<name> group is not a stack resource, so it outlived every
+  # teardown with never-expiring retention; and that name cannot carry the
+  # required app-b9dac5ac-bc8fbf47- prefix. Each function's LoggingConfig above
+  # points at its group here.
+  # ---------------------------------------------------------------------
+
+  S3VectorsSetupFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: app-b9dac5ac-bc8fbf47-fn-s3vectors-setup-logs
+      RetentionInDays: 14
+
+  IngestNormalizeFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: app-b9dac5ac-bc8fbf47-fn-ingest-normalize-logs
+      RetentionInDays: 14
+
+  CorrelateLogsFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: app-b9dac5ac-bc8fbf47-fn-correlate-logs-logs
+      RetentionInDays: 14
+
+  CorrelateConfigFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: app-b9dac5ac-bc8fbf47-fn-correlate-config-logs
+      RetentionInDays: 14
+
+  RagContextFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: app-b9dac5ac-bc8fbf47-fn-rag-context-logs
+      RetentionInDays: 14
+
+  GenerateRcaFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: app-b9dac5ac-bc8fbf47-fn-generate-rca-logs
+      RetentionInDays: 14
+
+  GenerateRunbookFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: app-b9dac5ac-bc8fbf47-fn-generate-runbook-logs
+      RetentionInDays: 14
+
+  NotifyFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: app-b9dac5ac-bc8fbf47-fn-notify-logs
+      RetentionInDays: 14
+
+  MarkPipelineFailedFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: app-b9dac5ac-bc8fbf47-fn-mark-pipeline-failed-logs
+      RetentionInDays: 14
+
+  TenantSettingsFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: app-b9dac5ac-bc8fbf47-fn-tenant-settings-logs
+      RetentionInDays: 14
+
+  NotifyImsFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: app-b9dac5ac-bc8fbf47-fn-notify-ims-logs
+      RetentionInDays: 14
+
+  AuditWriteFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: app-b9dac5ac-bc8fbf47-fn-audit-write-logs
+      RetentionInDays: 14
+
+  TenantProvisionFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: app-b9dac5ac-bc8fbf47-fn-tenant-provision-logs
+      RetentionInDays: 14
+
+  AuthorizerFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: app-b9dac5ac-bc8fbf47-fn-authorizer-logs
+      RetentionInDays: 14
+
+  QueryDiagnosticsFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: app-b9dac5ac-bc8fbf47-fn-query-diagnostics-logs
+      RetentionInDays: 14
+
+  TriggerRemediationFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: app-b9dac5ac-bc8fbf47-fn-trigger-remediation-logs
+      RetentionInDays: 14
+
+  # ---------------------------------------------------------------------
+  # Console hosting (S3 + CloudFront behind an Origin Access Control)
+  #
+  # The repo contains a front end that nothing used to deploy, so app_url
+  # pointed at the admin API's root — which answers "Missing Authentication
+  # Token" to a browser. This serves the console, and app_url is its CloudFront
+  # domain.
+  #
+  # SSE-S3 deliberately: a CloudFront OAC reading an SSE-KMS bucket also needs
+  # kms:Decrypt granted to the CloudFront service principal in the key's own
+  # policy, and without that every request returns an opaque AccessDenied.
+  # ---------------------------------------------------------------------
+  ConsoleBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      BucketName: !Sub app-b9dac5ac-bc8fbf47-console-${AWS::AccountId}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  ConsoleOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: app-b9dac5ac-bc8fbf47-console-oac
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  ConsoleDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: app-b9dac5ac-bc8fbf47 incident triage console
+        Enabled: true
+        DefaultRootObject: index.html
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: console-s3
+            DomainName: !GetAtt ConsoleBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt ConsoleOriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+        DefaultCacheBehavior:
+          TargetOriginId: console-s3
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS]
+          Compress: true
+          # CachingOptimized (AWS managed policy)
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+
+  ConsoleBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ConsoleBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub ${ConsoleBucket.Arn}/*
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub arn:aws:cloudfront::${AWS::AccountId}:distribution/${ConsoleDistribution}
 
   # ---------------------------------------------------------------------
   # CloudWatch alarms (SLA monitoring)
@@ -836,6 +1360,9 @@ Resources:
     Properties:
       AlarmName: app-b9dac5ac-bc8fbf47-alarm-runbook-sla
       AlarmDescription: Fires when a diagnosis pipeline execution exceeds the 5-minute runbook-delivery SLA.
+      # ExecutionTime is only published when an execution FINISHES, so this
+      # catches a slow pipeline. A HUNG one publishes no datapoint at all and is
+      # caught by RunbookSlaTimeoutAlarm instead.
       Namespace: AWS/States
       MetricName: ExecutionTime
       Dimensions:
@@ -855,6 +1382,9 @@ Resources:
     Properties:
       AlarmName: app-b9dac5ac-bc8fbf47-alarm-ingestion-sla
       AlarmDescription: Fires when alert ingestion (webhook to 202 response) exceeds the 1-minute SLA.
+      # Threshold sits well under the function's own 30s timeout. At 60000ms
+      # this alarm could never fire: Lambda kills the function at 30000ms, so
+      # Duration never reached the threshold and NFR-02 went unmonitored.
       Namespace: AWS/Lambda
       MetricName: Duration
       Dimensions:
@@ -863,13 +1393,99 @@ Resources:
       Statistic: Maximum
       Period: 60
       EvaluationPeriods: 1
-      Threshold: 60000
+      Threshold: 10000
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OpsAlarmsTopic
+
+
+  RunbookSlaTimeoutAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: app-b9dac5ac-bc8fbf47-alarm-runbook-sla-timeout
+      AlarmDescription: >
+        Fires when a diagnosis pipeline execution is killed by the state
+        machine's 300s timeout. This is the case NFR-01 most cares about and the
+        ExecutionTime alarm cannot see, because a hung execution publishes no
+        ExecutionTime datapoint at all.
+      Namespace: AWS/States
+      MetricName: ExecutionsTimedOut
+      Dimensions:
+        - Name: StateMachineArn
+          Value: !Ref DiagnosisPipeline
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OpsAlarmsTopic
+
+  IngestionErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: app-b9dac5ac-bc8fbf47-alarm-ingestion-errors
+      AlarmDescription: Fires when the ingestion webhook is erroring, i.e. alerts are being rejected or lost.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref IngestNormalizeFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OpsAlarmsTopic
+
+  UndispatchedAlertsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: app-b9dac5ac-bc8fbf47-alarm-undispatched-alerts
+      AlarmDescription: Fires when an alert reached EventBridge but could not be handed to the diagnosis pipeline.
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt AlertDispatchDlq.QueueName
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OpsAlarmsTopic
+
+  AuditWriteFailureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: app-b9dac5ac-bc8fbf47-alarm-audit-write-failures
+      AlarmDescription: Fires when an audit record could not be persisted. Anything here is a compliance gap.
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt AuditWriteDlq.QueueName
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
       ComparisonOperator: GreaterThanThreshold
       TreatMissingData: notBreaching
       AlarmActions:
         - !Ref OpsAlarmsTopic
 
 Outputs:
+  # CloudFormation output names must be alphanumeric, so the contract's
+  # app_url key is produced by deploy.sh from this output.
+  AppUrl:
+    Description: The incident triage console.
+    Value: !Sub https://${ConsoleDistribution.DomainName}
   IngestionApiUrl:
     Value: !Sub https://${IngestionApi}.execute-api.${AWS::Region}.amazonaws.com/prod/v1/alerts
   AdminApiUrl:
@@ -880,9 +1496,21 @@ Outputs:
     Value: !Ref UserPool
   UserPoolClientId:
     Value: !Ref UserPoolClient
+  ConsoleBucketName:
+    Value: !Ref ConsoleBucket
+  ConsoleDistributionId:
+    Value: !Ref ConsoleDistribution
   RunbooksBucketName:
     Value: !Ref RunbooksBucket
   ContextCacheBucketName:
     Value: !Ref ContextCacheBucket
+  AuditExportsBucketName:
+    Value: !Ref AuditExportsBucket
   DiagnosisPipelineArn:
     Value: !Ref DiagnosisPipeline
+  PipelineFailureDlqUrl:
+    Value: !Ref PipelineFailureDlq
+  AlertDispatchDlqUrl:
+    Value: !Ref AlertDispatchDlq
+  AuditWriteDlqUrl:
+    Value: !Ref AuditWriteDlq

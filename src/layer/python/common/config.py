@@ -21,11 +21,24 @@ OPS_ALARMS_TOPIC_ARN = os.environ.get("OPS_ALARMS_TOPIC_ARN", "")
 TENANT_SCOPED_ROLE_ARN = os.environ.get("TENANT_SCOPED_ROLE_ARN", "")
 
 USER_POOL_ID = os.environ.get("USER_POOL_ID", "")
+USER_POOL_CLIENT_ID = os.environ.get("USER_POOL_CLIENT_ID", "")
+
+# Cognito ID tokens carry the caller's groups, so the authorizer resolves roles
+# from the verified token instead of an API call per request.
+GROUP_PRIORITY = ("TenantAdmin", "TenantEngineer", "TenantLeadership")
 
 EMBED_MODEL_ID = "cohere.embed-multilingual-v3"
 HAIKU_MODEL_ID = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 MAX_EMBED_INPUT_CHARS = 2048
+
+# NFR-01 gives the whole pipeline five minutes; NFR-05 gives correlation 60s.
+RUNBOOK_SLA_SECONDS = 300
+CORRELATION_SLA_SECONDS = 60
+
+# Presigned runbook downloads. The signing session is sized from this, so the
+# URL cannot outlive the credentials behind it.
+RUNBOOK_URL_TTL_SECONDS = 900
 
 AUDIT_WRITE_FUNCTION_NAME = os.environ.get("AUDIT_WRITE_FUNCTION_NAME", "")
 NOTIFY_IMS_FUNCTION_NAME = os.environ.get("NOTIFY_IMS_FUNCTION_NAME", "")

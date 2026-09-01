@@ -9,3 +9,8 @@ build/
 outputs.json
 .env
 *.log
+.pytest_cache/
+# Local Claude Code permission state, not shared configuration. Excluded here as
+# well as in any developer's global ignore file, because the platform's build step
+# runs `git add -A` and a machine without that global rule would commit it.
+.claude/settings.local.json

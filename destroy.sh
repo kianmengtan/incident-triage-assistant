@@ -1,33 +1,84 @@
 #!/usr/bin/env bash
+#
+# Tears down everything deploy.sh created, including the resources
+# CloudFormation never owned.
 set -euo pipefail
 
 PREFIX="app-b9dac5ac-bc8fbf47"
 REGION="ap-southeast-1"
 STACK_NAME="${STACK_NAME:-${PREFIX}-triage}"
+ARTIFACTS_BUCKET="${TEMPLATE_BUCKET:-${PREFIX}-artifacts}"
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text --region "${REGION}")
-
-echo "==> Emptying S3 buckets owned by this stack (CloudFormation cannot delete non-empty buckets)"
-for bucket in "${PREFIX}-context-cache-${ACCOUNT_ID}" "${PREFIX}-runbooks-${ACCOUNT_ID}" "${PREFIX}-audit-exports-${ACCOUNT_ID}"; do
+empty_bucket() {
+  local bucket="$1"
   if aws s3api head-bucket --bucket "${bucket}" --region "${REGION}" 2>/dev/null; then
-    aws s3 rm "s3://${bucket}" --recursive --region "${REGION}" || true
+    echo "    emptying ${bucket}"
+    aws s3 rm "s3://${bucket}" --recursive --region "${REGION}" >/dev/null || true
+    # Delete markers and noncurrent versions too, so a versioned bucket does not
+    # block DeleteStack after the objects appear to be gone.
+    aws s3api list-object-versions --bucket "${bucket}" --region "${REGION}" \
+      --query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}' --output json 2>/dev/null \
+      | grep -q '"Key"' && \
+      aws s3api delete-objects --bucket "${bucket}" --region "${REGION}" \
+        --delete "$(aws s3api list-object-versions --bucket "${bucket}" --region "${REGION}" \
+          --query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}' --output json)" >/dev/null 2>&1 || true
   fi
+}
+
+# ---------------------------------------------------------------------------
+# Buckets are read from the stack rather than hardcoded: a renamed or added
+# bucket would otherwise be missed here and silently block DeleteStack.
+# ---------------------------------------------------------------------------
+echo "==> Emptying S3 buckets owned by the stack (CloudFormation cannot delete non-empty buckets)"
+STACK_BUCKETS=$(aws cloudformation list-stack-resources \
+  --stack-name "${STACK_NAME}" \
+  --region "${REGION}" \
+  --query "StackResourceSummaries[?ResourceType=='AWS::S3::Bucket'].PhysicalResourceId" \
+  --output text 2>/dev/null || true)
+
+for bucket in ${STACK_BUCKETS}; do
+  empty_bucket "${bucket}"
 done
 
 echo "==> Deleting stack ${STACK_NAME}"
 aws cloudformation delete-stack --stack-name "${STACK_NAME}" --region "${REGION}"
-aws cloudformation wait stack-delete-complete --stack-name "${STACK_NAME}" --region "${REGION}"
+if ! aws cloudformation wait stack-delete-complete --stack-name "${STACK_NAME}" --region "${REGION}"; then
+  echo "!! stack delete did not complete; remaining resources:" >&2
+  aws cloudformation describe-stack-events --stack-name "${STACK_NAME}" --region "${REGION}" \
+    --query "StackEvents[?ResourceStatus=='DELETE_FAILED'].[LogicalResourceId,ResourceStatusReason]" \
+    --output text >&2 || true
+  exit 1
+fi
 
-echo "==> Cleaning up per-tenant Secrets Manager entries (not owned by the CloudFormation stack)"
+# ---------------------------------------------------------------------------
+# Resources CloudFormation never owned.
+# ---------------------------------------------------------------------------
+echo "==> Cleaning up per-tenant Secrets Manager entries"
 SECRET_ARNS=$(aws secretsmanager list-secrets \
   --region "${REGION}" \
   --filters Key=name,Values="${PREFIX}-tenant-" \
   --query 'SecretList[].ARN' \
   --output text || true)
 for arn in ${SECRET_ARNS}; do
-  aws secretsmanager delete-secret --secret-id "${arn}" --force-delete-without-recovery --region "${REGION}" || true
+  aws secretsmanager delete-secret --secret-id "${arn}" --force-delete-without-recovery --region "${REGION}" >/dev/null || true
 done
+
+echo "==> Deleting the deploy artifacts bucket"
+empty_bucket "${ARTIFACTS_BUCKET}"
+aws s3api delete-bucket --bucket "${ARTIFACTS_BUCKET}" --region "${REGION}" 2>/dev/null || true
+
+# The vector bucket is created by the S3VectorsSetup custom resource, which
+# deletes it on stack delete. Checked here because that delete is best-effort:
+# a leftover vector bucket is a resource the platform will not clean up.
+echo "==> Verifying the vector bucket is gone"
+if aws s3vectors get-vector-bucket --vector-bucket-name "${PREFIX}-vectors" --region "${REGION}" >/dev/null 2>&1; then
+  echo "    still present, deleting directly"
+  aws s3vectors delete-index --vector-bucket-name "${PREFIX}-vectors" --index-name incidents --region "${REGION}" >/dev/null 2>&1 || true
+  aws s3vectors delete-vector-bucket --vector-bucket-name "${PREFIX}-vectors" --region "${REGION}" >/dev/null 2>&1 || true
+fi
+
+rm -f outputs.json
 
 echo "==> Destroy complete"

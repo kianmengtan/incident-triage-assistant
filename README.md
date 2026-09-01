@@ -15,8 +15,10 @@ triaged incident with a proposed root-cause analysis and an approvable
 remediation runbook, with minimal human effort:
 
 1. **Ingest** — an external monitoring tool (e.g. Datadog, PagerDuty) POSTs an
-   alert webhook to a per-tenant, API-key-protected endpoint. The alert is
-   normalized, deduplicated, and dropped onto EventBridge.
+   alert webhook to a per-tenant, API-key-protected endpoint, signed with that
+   tenant's HMAC secret. The alert is normalized, deduplicated on `alert_id`, and
+   dropped onto EventBridge. A delivery that is stored but cannot be dispatched
+   is reported as a 5xx rather than acknowledged, and a retry re-dispatches it.
 2. **Correlate** — a Step Functions pipeline fans out in parallel to pull the
    relevant application logs and recent config/deploy history for the
    affected service, caching both to S3.
@@ -32,17 +34,48 @@ remediation runbook, with minimal human effort:
    runbook, stored in S3 and tracked in DynamoDB with `approval_status:
    pending`. On-call is notified over SNS.
 6. **Approve & remediate** — a tenant admin reviews the runbook and diagnosis
-   through the admin API, and approving it triggers the downstream
-   remediation call and records an immutable audit trail entry.
+   through the admin API, and approving it triggers the downstream remediation
+   call. Approval is claimed with a conditional write before that call, so a
+   double-click or a client retry cannot execute the remediation twice, and the
+   attempt is written to the audit trail both before and after — including
+   refused attempts. Declining is a recorded decision too, not a UI-only state.
 
 Every step is scoped to the tenant that owns the alert: DynamoDB rows are
 partitioned by `tenant_id`, S3 objects live under a `tenant/{tenant_id}/`
 prefix, and reads/writes are additionally enforced at the IAM layer via a
 short-lived `sts:AssumeRole` session tagged with the caller's `tenant_id`
 (`dynamodb:LeadingKeys` / S3 resource ARN policy variables), so a bug in
-application code cannot leak one tenant's data to another. Sensitive
-diagnosis fields are further encrypted at rest with a per-tenant data
-encryption key stored in Secrets Manager.
+application code cannot leak one tenant's data to another. Sensitive diagnosis
+fields — the RCA summary, the remediation steps and the retrieved-incident
+references — are encrypted at rest with a per-tenant data encryption key stored
+in Secrets Manager.
+
+Which tenant a user belongs to is decided server-side and only once, by the
+`PostConfirmation` trigger, from their verified email domain. It is deliberately
+not a signup attribute the client can write: with self-signup enabled, a
+writable `custom:tenant_id` would let anyone claim an existing tenant's id and
+read its incidents, which no amount of downstream IAM scoping would catch —
+every control below that point faithfully scopes access to whatever tenant the
+token claims. The admin authorizer verifies the ID token's RS256 signature
+against the pool's JWKS and checks issuer, audience, `token_use` and expiry, so a
+token minted by a different Cognito user pool is rejected rather than trusted for
+its `custom:tenant_id`. The first user of a tenant becomes its `TenantAdmin`;
+nothing else grants group membership, and without it no one could approve
+remediation at all.
+
+Outbound calls to tenant-configured endpoints (log platform, VCS, remediation
+platform, IMS) go through one guard in `common/http.py`: https only, the resolved
+address must be public, redirects are refused, and the response is size-capped.
+Those URLs come out of a tenant's own secret, so they are attacker-controlled
+input into a function holding tenant credentials. The guard is in two halves:
+`assert_target_shape` judges what a URL shows on its own (scheme, and a literal
+IP) and is what the settings API validates a stored endpoint against; the full
+check adds resolution and runs on every call, because a hostname that resolves
+publicly at write time can be repointed afterwards.
+
+Tenants configure those endpoints through `GET/PUT/DELETE /v1/integrations`,
+restricted to `TenantAdmin` and audited. API keys are write-only: a read returns
+the endpoint and a boolean for whether a key is set, never the key.
 
 ## What was built
 
@@ -50,45 +83,100 @@ encryption key stored in Secrets Manager.
   - API Gateway: a public, API-key-gated ingestion API (`POST /v1/alerts`)
     and an admin API behind a custom Lambda authorizer backed by Cognito
     (diagnostics/runbook read endpoints + remediation approval).
-  - Lambda: 14 functions (ingestion/normalization, log correlation, config
+  - Lambda: 16 functions (ingestion/normalization, log correlation, config
     correlation, RAG context retrieval, RCA/remediation generation, runbook
-    generation, notifications, audit recording, tenant provisioning, the
-    admin authorizer, diagnostics/runbook queries, remediation approval, and
-    an S3 Vectors setup custom resource), all Python 3.13, sharing one
-    Lambda Layer (`common/`) for config, tenant-scoped AWS clients,
-    encryption, Bedrock calls, and audit helpers.
+    generation, notifications, IMS push, audit recording, tenant provisioning,
+    tenant integration settings, the admin authorizer, diagnostics/runbook
+    queries, remediation approval, pipeline-failure marking, and an S3 Vectors
+    setup custom resource), all Python 3.13, sharing one Lambda Layer
+    (`common/`) for config, tenant-scoped AWS clients, encryption, Bedrock
+    calls, progress reporting, and audit helpers.
   - Step Functions: `diagnosis_pipeline.asl.json` orchestrates correlation →
     RAG → RCA generation → runbook generation → notification, with
-    `Retry`/`Catch` and DLQ fallbacks at each stage.
+    `Retry`/`Catch` at each stage and a failure path that marks the alert
+    failed, preserves the full state on a DLQ and publishes identifiers to the
+    ops topic. A top-level `TimeoutSeconds: 300` enforces NFR-01's budget rather
+    than only alarming after the fact; per-attempt timeouts are sized so the
+    expected path finishes around 195s. An execution killed by that timeout runs
+    no `Catch` at all, so `TIMED_OUT` and `ABORTED` executions are picked up by
+    an EventBridge rule and marked failed from outside the execution.
   - DynamoDB: Tenants, Alerts, Diagnostics, Runbooks, and AuditTrail tables,
     all partitioned by `tenant_id` with a 6-month TTL on audit records.
   - S3: context-cache, runbooks, and audit-export buckets, plus an
     `app-b9dac5ac-bc8fbf47-vectors` S3 Vectors bucket/index (provisioned via
     a custom resource, since S3 Vectors has no native CloudFormation type).
-  - EventBridge, SQS, SNS: alert event bus with a buffering queue + DLQ, and
-    an SNS topic for runbook-ready notifications.
-  - Cognito: a user pool with a `tenant_id` custom attribute, self-signup,
-    `TenantAdmin`/`TenantEngineer` groups, and a `PostConfirmation` trigger
-    that provisions the tenant's DynamoDB row and per-tenant secrets.
+  - EventBridge, SQS, SNS: alert event bus with three single-purpose dead-letter
+    queues — undispatched alerts, failed pipeline executions, and unwritable
+    audit records — plus SNS topics for runbook-ready notifications and ops
+    alarms. The ops alarm carries identifiers only; the pipeline's full state
+    goes to its DLQ, where a redrive can resume from it.
+  - Cognito: a user pool with a server-set `tenant_id` custom attribute (not
+    client-writable), self-signup, `TenantAdmin`/`TenantEngineer`/
+    `TenantLeadership` groups, and a `PostConfirmation` trigger that derives the
+    tenant, provisions its secrets and then its profile row (in that order, so a
+    failed secret cannot leave a tenant permanently half-provisioned), and puts
+    the tenant's first user in `TenantAdmin`.
+  - CloudFront + S3: the console at `app_url`, served through an Origin Access
+    Control from an SSE-S3 bucket.
+  - CloudWatch: one log group per function, owned by the stack with a 14-day
+    retention, plus SLA and failure alarms whose thresholds sit inside the
+    limits of what they measure.
   - Secrets Manager: per-tenant webhook HMAC secret, integration
     credentials, and encryption key, all under the
     `app-b9dac5ac-bc8fbf47-` prefix.
   - IAM: a `TenantScopedRole` assumed (with session tags) by every function
     that touches tenant data, plus per-function least-privilege policies.
 - **`src/handlers/`** — the Lambda function source described above.
-- **`src/layer/python/common/`** — shared helpers (`config`, `response`,
-  `tenant_scope`, `crypto`, `bedrock`, `audit`) plus a vendored
-  `cfnresponse` for the custom resource.
+- **`src/layer/python/`** — the Lambda layer's import root, and the layer's
+  `ContentUri`. `common/` holds the shared helpers (`config`, `response`,
+  `tenant_scope`, `crypto`, `bedrock`, `audit`, `http`, `integrations`, `jwt`,
+  `progress`) alongside a vendored `cfnresponse` for the custom resource.
+
+  This directory *is* `/opt/python` in the deployed function. SAM adds the
+  `python/` prefix itself when it builds a Python layer, so `ContentUri` must point
+  here and not at `src/layer/` — pointing one level up nests the two and produces
+  `/opt/python/python/common/`, which is not on `PYTHONPATH`. `requirements.txt`
+  lives here for the same reason: SAM looks for the manifest inside `ContentUri`.
+- **`frontend/`** — the incident console, published by `./deploy.sh` as the page
+  `app_url` points at. See `frontend/README.md`; it runs on fixture data and says
+  so on the page.
+- **`design/`** — the visual reference and the front-end design specification.
 - **`statemachine/diagnosis_pipeline.asl.json`** — the Step Functions
   definition.
-- **`tests/`** — pytest unit tests (mocking all AWS calls) covering
-  ingestion dedup/HMAC validation, tenant-scoped query enforcement,
-  admin-approval authorization, and audit recording; run with
-  `pytest tests/ -q` (18 tests, all passing).
+- **`tests/`** — 260 pytest tests. Most mock every AWS call and cover ingestion
+  dedup and HMAC validation, `alert_id` validation, the SSRF guard's two halves,
+  token verification and its bypass cases, tenant derivation, the per-tenant
+  encryption boundary, the exactly-once approval claim, audit append-only
+  behaviour, the integration settings API, progress recording, model output that
+  misbehaves, and tenant-scoped query enforcement. Run with `pytest -q`.
+  The console has 60 of its own: `cd frontend && npm test`.
+
+  It also asserts the layer's packaging: that the layer's import root has no
+  nested `python/` directory, that every module the handlers import from the layer
+  sits directly in it, that the pip manifest is inside `ContentUri`, and that
+  `conftest.py`'s `sys.path` entry is the same directory the runtime will use.
+  That last one matters because the tests putting `src/layer/python` on the path
+  directly is precisely what let a mispackaged layer pass every test.
+
+  `tests/test_template_contract.py` is different in kind and worth knowing about.
+  Unit tests that mock boto3 cannot see the deployed topology, so a handler can
+  serve a route API Gateway does not expose, or query an index its role cannot
+  read, with every test green. That test runs the real SAM transform and asserts
+  the generated stack against the handler source: no circular dependencies, every
+  dispatched route exposed, every function that can reach `common.tenant_scope`
+  holding `sts:AssumeRole` + `sts:TagSession`, every queried GSI covered by an IAM
+  grant, every state-machine target invokable, and a permissions boundary on every
+  role. It needs `aws-sam-translator`, which is why that is now a test
+  requirement — `cfn-lint` does not transform the template without it, so a clean
+  lint says nothing about any of the above.
 - **`deploy.sh`** / **`destroy.sh`** — idempotent build/deploy and teardown
-  scripts using `sam build`/`sam deploy` against a self-managed artifacts
-  bucket (`app-b9dac5ac-bc8fbf47-artifacts`), writing `outputs.json`
-  (including `app_url`, the admin API's base URL) on success.
+  scripts using `sam build`/`sam deploy` against a self-managed artifacts bucket
+  (`app-b9dac5ac-bc8fbf47-artifacts`). `deploy.sh` runs both test suites first,
+  publishes the console, and writes `outputs.json` with `app_url` pointing at the
+  CloudFront console; it exits non-zero rather than writing an empty `app_url`.
+  `destroy.sh` reads the stack's buckets rather than hardcoding them, removes the
+  artifacts bucket and per-tenant secrets that CloudFormation never owned, and
+  verifies the S3 Vectors bucket is actually gone.
 
 ## Bedrock models used
 
@@ -102,14 +190,59 @@ encryption key stored in Secrets Manager.
 ```
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r tests/requirements-test.txt
-pytest tests/ -q
+pytest -q                        # 260 backend tests
+(cd frontend && npm test)        # 60 console tests
+(cd frontend && npm run check-sync)  # the inlined logic has not drifted
+cfn-lint template.yaml           # template lint, no AWS credentials needed
 sam validate --template-file template.yaml --region ap-southeast-1 --lint
 sam build --template-file template.yaml
+
+# What actually lands on /opt/python. Worth an eye after touching the layer:
+# cfnresponse.py and common/ must be at this root, not one level deeper.
+ls .aws-sam/build/CommonLayer/python/
+open frontend/prototype.html     # the console, on fixture data
 ```
 
 ## Deploying
 
 ```
-./deploy.sh   # builds, deploys the stack, writes outputs.json
+./deploy.sh   # tests, builds, deploys, publishes the console, writes outputs.json
 ./destroy.sh  # tears down everything deploy.sh created
 ```
+
+`app_url` in `outputs.json` is the console's CloudFront URL. `AdminApiUrl` is the
+authenticated REST API; it is not browsable without a Cognito ID token.
+
+## Known limitations and deliberate trade-offs
+
+**The console is not yet wired to the live API.** It renders fixture data, and the
+page says so. `deploy.sh` publishes the deployed API and Cognito identifiers to
+`config.json` next to it, which is what a follow-on change would read. Everything
+behind the API — ingestion, the pipeline, the approval gate — is real and
+exercised by the test suites. `design/frontend-design.md` covers what wiring it up
+requires.
+
+**Runbook documents are not encrypted with the tenant DEK.** The RCA text is, in
+the Diagnostics table; the runbook that restates it is written to S3 under bucket
+default encryption (SSE-S3) only. A runbook is 1–3 MB and is delivered to the
+browser as a presigned GET, which an application-layer key makes impossible, so
+encrypting it would mean routing every download through the API. The isolation
+boundary for those objects is the tenant-prefixed IAM condition on
+`TenantScopedRole` plus a bucket with public access fully blocked. This is a
+trade-off, not an oversight — see the note in `generate_runbook.py`.
+
+**The SSRF guard has a resolve-then-connect window.** `common/http.py` resolves a
+hostname and checks the address, then `urlopen` resolves again; a DNS record that
+changes in between is not caught. Closing it means pinning the checked address and
+carrying the hostname for TLS verification by hand. Acceptable at prototype scale,
+and stated here rather than left implicit.
+
+**Two resources are provisioned and unused.** `AuditExportsBucket` exists for the
+compliance-export path, which is not built yet, and `RunbookReadyTopic` has no
+subscriber — it is published to, so a subscription is all that a notification
+channel needs. Both are named in the outputs.
+
+**A pathological retry path can breach the 300s SLA.** Per-attempt timeouts are
+sized for the expected path (~195s). If every stage retries, the execution hits
+the state machine's own timeout — which is the intended behaviour for an SLA
+guard, and is now both alarmed and recorded on the alert row rather than silent.

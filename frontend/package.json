@@ -1,0 +1,12 @@
+{
+  "name": "triage-console-prototype",
+  "private": true,
+  "type": "module",
+  "description": "Chat-first incident console prototype. Zero runtime dependencies by design: prototype.html must stay a single file that opens from disk.",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "sync": "node sync-lib.mjs",
+    "check-sync": "node sync-lib.mjs --check"
+  }
+}

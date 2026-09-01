@@ -1,0 +1,2390 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Triage — incident diagnosis console</title>
+<style>
+/* ============================================================
+   Tokens lifted verbatim from design/reference.html :root.
+   No adjacent shades invented; every status colour below reuses
+   one of these.
+   ============================================================ */
+:root {
+  --color-bg:        #FBF7F1;
+  --color-surface:   #FFFFFF;
+  --color-raised:    #F4EDE3;
+  --color-border:    #E8DFD2;
+  --color-border-strong: #D3C5B1;
+
+  --color-ink:       #241C15;
+  --color-ink-muted: #5C4F42;
+  --color-ink-faint: #877868;
+  --color-ink-invert:#FFFDFA;
+
+  --color-accent:      #A6482B;
+  --color-accent-hover:#8A3A21;
+  --color-accent-soft: #F7E9E2;
+  --color-secondary:   #2F5D50;
+  --color-success:     #2F5D50;
+  --color-success-soft:#E4EEE9;
+  --color-warning:     #8A5B12;
+  --color-warning-soft:#F8EEDC;
+  --color-danger:      #9E2B25;
+  --color-danger-soft: #F8E6E4;
+
+  --font-display: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  --font-body:    system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono:    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --text-sm:   14px;
+  --text-base: 17px;
+  --text-md:   20px;
+  --text-lg:   26px;
+  --text-xl:   36px;
+  --text-2xl:  52px;
+  --leading-tight: 1.15;
+  --leading-body:  1.65;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 16px;
+  --space-4: 24px;
+  --space-5: 32px;
+  --space-6: 48px;
+  --space-7: 72px;
+  --space-8: 112px;
+
+  --radius-sm: 8px;
+  --radius:    14px;
+  --radius-lg: 22px;
+  --radius-pill: 999px;
+
+  --shadow-sm: 0 1px 2px rgba(36, 28, 21, 0.05), 0 2px 8px rgba(36, 28, 21, 0.05);
+  --shadow:    0 2px 4px rgba(36, 28, 21, 0.05), 0 12px 28px rgba(36, 28, 21, 0.09);
+}
+
+* { box-sizing: border-box; }
+
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  line-height: var(--leading-body);
+  -webkit-font-smoothing: antialiased;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+:focus-visible {
+  outline: 2.5px solid var(--color-secondary);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0;
+  margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* ---------- shared primitives, shapes from the reference ---------- */
+.btn {
+  font: inherit; font-size: var(--text-base); font-weight: 600;
+  border-radius: var(--radius-pill); padding: 11px var(--space-4);
+  border: 1.5px solid transparent; cursor: pointer;
+  transition: background-color 140ms cubic-bezier(0.2,0.7,0.3,1), box-shadow 140ms cubic-bezier(0.2,0.7,0.3,1);
+}
+.btn-sm { font-size: var(--text-sm); padding: 6px var(--space-3); }
+.btn-primary { background: var(--color-accent); color: var(--color-ink-invert); box-shadow: var(--shadow-sm); }
+.btn-primary:hover:not(:disabled) { background: var(--color-accent-hover); box-shadow: var(--shadow); }
+.btn-secondary { background: var(--color-surface); color: var(--color-ink); border-color: var(--color-border-strong); }
+.btn-secondary:hover:not(:disabled) { background: var(--color-raised); }
+.btn-quiet { background: transparent; color: var(--color-accent); padding-left: var(--space-3); padding-right: var(--space-3); }
+.btn-quiet:hover:not(:disabled) { background: var(--color-accent-soft); }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: none; }
+
+.badge {
+  display: inline-flex; align-items: center; gap: var(--space-1);
+  font-size: var(--text-sm); font-weight: 600;
+  padding: 2px var(--space-3); border-radius: var(--radius-pill); white-space: nowrap;
+}
+.badge-neutral { background: var(--color-raised); color: var(--color-ink-muted); }
+.badge-success { background: var(--color-success-soft); color: #1F4238; }
+.badge-warning { background: var(--color-warning-soft); color: #6A450C; }
+.badge-danger  { background: var(--color-danger-soft);  color: #7B211C; }
+
+.alert { border: 1px solid; border-radius: var(--radius-sm); padding: var(--space-3) var(--space-4); }
+.alert-info    { background: var(--color-raised);       border-color: var(--color-border-strong); color: var(--color-ink); }
+.alert-success { background: var(--color-success-soft); border-color: #C4DBD2; color: #1F4238; }
+.alert-warning { background: var(--color-warning-soft); border-color: #E6D3AE; color: #6A450C; }
+.alert-danger  { background: var(--color-danger-soft);  border-color: #EFC7C4; color: #7B211C; }
+
+.card {
+  background: var(--color-surface); border: 1px solid var(--color-border);
+  border-radius: var(--radius); box-shadow: var(--shadow-sm); padding: var(--space-4);
+}
+.card > h3 {
+  font-family: var(--font-display); font-size: var(--text-md); font-weight: 600;
+  margin: 0; letter-spacing: -0.01em;
+}
+.empty {
+  border: 1.5px dashed var(--color-border-strong); border-radius: var(--radius);
+  padding: var(--space-6) var(--space-4); text-align: center;
+  color: var(--color-ink-muted); background: var(--color-surface);
+}
+.empty strong {
+  display: block; font-family: var(--font-display); font-size: var(--text-md);
+  color: var(--color-ink); font-weight: 600; margin-bottom: var(--space-2);
+}
+.meta { font-size: var(--text-sm); color: var(--color-ink-muted); }
+.mono { font-family: var(--font-mono); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
+.row { display: flex; gap: var(--space-3); flex-wrap: wrap; align-items: center; }
+
+/* ---------- topbar ---------- */
+.topbar {
+  display: flex; align-items: center; gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-surface); border-bottom: 1px solid var(--color-border);
+  flex: none; flex-wrap: wrap;
+}
+.wordmark {
+  font-family: var(--font-display); font-size: var(--text-lg); font-weight: 600;
+  letter-spacing: -0.015em; margin: 0; line-height: 1;
+}
+.wordmark span { color: var(--color-accent); }
+.topbar-sep { color: var(--color-border-strong); }
+.prototype-note {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 1px var(--space-2);
+  white-space: nowrap;
+}
+@media (max-width: 700px) { .prototype-note { display: none; } }
+.tenant { font-size: var(--text-sm); color: var(--color-ink-muted); }
+.tenant strong { color: var(--color-ink); font-weight: 640; }
+.topbar-right { margin-left: auto; display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; min-width: 0; }
+.demo-control {
+  display: flex; align-items: center; gap: var(--space-2);
+  background: var(--color-raised); border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-pill); padding: var(--space-1) var(--space-3);
+}
+.demo-control label { font-size: var(--text-sm); color: var(--color-ink-muted); font-weight: 640; }
+.demo-control select {
+  font: inherit; font-size: var(--text-sm); font-weight: 600;
+  background: transparent; border: 0; color: var(--color-ink); cursor: pointer;
+}
+
+/* ---------- app shell ---------- */
+.app { flex: 1; display: grid; grid-template-columns: 300px minmax(0, 1fr); min-height: 0; }
+.app.has-drawer { grid-template-columns: 300px minmax(0, 1fr) 420px; }
+
+/* ---------- incident rail ---------- */
+.rail {
+  border-right: 1px solid var(--color-border); background: var(--color-surface);
+  display: flex; flex-direction: column; min-height: 0;
+}
+.rail-head { padding: var(--space-3); border-bottom: 1px solid var(--color-border); flex: none; }
+.rail-head h2 {
+  font-size: var(--text-sm); font-weight: 640; color: var(--color-ink-muted);
+  margin: 0 0 var(--space-2); text-transform: uppercase; letter-spacing: 0.04em;
+}
+.input {
+  width: 100%; font: inherit; font-size: var(--text-base);
+  padding: 9px var(--space-3); border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-sm); background: var(--color-surface); color: var(--color-ink);
+}
+.input::placeholder { color: var(--color-ink-faint); }
+.input:focus { outline: 2.5px solid var(--color-secondary); outline-offset: 2px; border-color: var(--color-secondary); }
+.rail-search { position: relative; }
+.rail-search .kbd-hint { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); pointer-events: none; }
+.kbd {
+  font-family: var(--font-mono); font-size: 11px; color: var(--color-ink-muted);
+  background: var(--color-raised); border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm); padding: 1px 5px;
+}
+.rail-list { overflow-y: auto; padding: var(--space-2) 0 var(--space-4); flex: 1; }
+.rail-group {
+  font-size: var(--text-sm); font-weight: 640; color: var(--color-ink-muted);
+  padding: var(--space-3) var(--space-3) var(--space-1); text-transform: uppercase; letter-spacing: 0.04em;
+}
+.incident {
+  display: block; width: 100%; text-align: left; font: inherit; cursor: pointer;
+  background: transparent; border: 0; border-left: 3px solid transparent;
+  padding: var(--space-3); transition: background-color 120ms ease;
+}
+.incident:hover { background: var(--color-raised); }
+.incident[aria-current="true"] { background: var(--color-raised); border-left-color: var(--color-accent); }
+.incident-top { display: flex; align-items: center; gap: var(--space-2); margin-bottom: 2px; }
+.incident-service { font-weight: 640; font-size: var(--text-base); }
+.incident-title {
+  font-size: var(--text-sm); color: var(--color-ink-muted); line-height: 1.4;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.incident-foot {
+  display: flex; align-items: center; gap: var(--space-2);
+  margin-top: var(--space-1); font-size: var(--text-sm); color: var(--color-ink-muted);
+}
+.dot { width: 7px; height: 7px; border-radius: var(--radius-pill); flex: none; }
+.dot-live { background: var(--color-accent); animation: pulse 1.8s ease-in-out infinite; }
+.dot-done { background: var(--color-success); }
+.dot-attention { background: var(--color-accent); }
+.dot-failed { background: var(--color-danger); }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+/* ---------- conversation ---------- */
+.main { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.transcript { flex: 1; overflow-y: auto; padding: var(--space-5) var(--space-4) var(--space-4); }
+.transcript-inner { max-width: 860px; margin: 0 auto; display: flex; flex-direction: column; gap: var(--space-5); }
+
+.turn-user {
+  align-self: flex-end; max-width: 70ch;
+  background: var(--color-raised); border: 1px solid var(--color-border);
+  border-radius: var(--radius); padding: var(--space-3) var(--space-4);
+}
+.turn-assistant { max-width: 72ch; }
+.turn-assistant p { margin: 0 0 var(--space-3); }
+.turn-assistant p:last-child { margin-bottom: 0; }
+.turn-assistant strong { font-weight: 640; }
+.turn-wide { max-width: 100%; }
+
+.tool-chip {
+  display: inline-flex; align-items: center; gap: var(--space-2);
+  font-size: var(--text-sm); color: var(--color-ink-muted);
+  background: var(--color-raised); border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill); padding: var(--space-1) var(--space-3);
+}
+.spin { display: inline-block; animation: spin 1.1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.caret { display: inline-block; width: 2px; height: 1em; background: var(--color-accent); vertical-align: -0.15em; animation: blink 1s step-end infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+
+/* ---------- pipeline card ---------- */
+.pipeline-head { display: flex; align-items: baseline; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--space-4); }
+.pipeline-clock { margin-left: auto; font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: var(--text-md); font-weight: 600; }
+.stages { list-style: none; margin: 0 0 var(--space-4); padding: 0; }
+.stage { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: var(--space-3); padding: var(--space-2) 0; align-items: start; }
+.stage + .stage { border-top: 1px solid var(--color-border); }
+.stage-glyph { text-align: center; font-size: var(--text-sm); line-height: 1.6; }
+.stage-idle    .stage-glyph { color: var(--color-ink-faint); }
+.stage-active  .stage-glyph { color: var(--color-accent); }
+.stage-success .stage-glyph { color: var(--color-success); }
+.stage-danger  .stage-glyph { color: var(--color-danger); }
+.stage-warning .stage-glyph { color: var(--color-warning); }
+.stage-label { font-weight: 640; }
+.stage-idle .stage-label { color: var(--color-ink-muted); font-weight: 400; }
+.stage-detail { display: block; font-size: var(--text-sm); color: var(--color-ink-muted); margin-top: 2px; }
+.stage-dur { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--color-ink-muted); font-variant-numeric: tabular-nums; }
+.stage-parallel { margin-left: var(--space-4); border-left: 1px solid var(--color-border); padding-left: var(--space-3); }
+
+.sla { border-top: 1px solid var(--color-border); padding-top: var(--space-3); }
+.sla-label { display: flex; justify-content: space-between; font-size: var(--text-sm); color: var(--color-ink-muted); margin-bottom: var(--space-2); }
+.sla-track { height: 10px; background: var(--color-raised); border-radius: var(--radius-pill); overflow: hidden; }
+.sla-fill { height: 100%; border-radius: var(--radius-pill); background: var(--color-secondary); transition: width 200ms linear, background-color 300ms ease; }
+.sla-warning .sla-fill { background: var(--color-warning); }
+.sla-danger .sla-fill  { background: var(--color-danger); }
+
+/* ---------- diagnosis card ---------- */
+.dx-head { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; margin-bottom: var(--space-3); }
+.dx-cause { font-family: var(--font-display); font-size: var(--text-lg); font-weight: 600; line-height: var(--leading-tight); letter-spacing: -0.015em; margin: 0 0 var(--space-3); }
+.dx-body { max-width: 70ch; color: var(--color-ink); margin: 0 0 var(--space-4); }
+.chips { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+.chip {
+  font: inherit; font-size: var(--text-sm); cursor: pointer;
+  background: var(--color-accent-soft); color: var(--color-accent);
+  border: 1px solid transparent; border-radius: var(--radius-pill);
+  padding: var(--space-1) var(--space-3); font-weight: 600;
+}
+.chip:hover { background: var(--color-surface); border-color: var(--color-accent); }
+.section-label { font-size: var(--text-sm); font-weight: 640; color: var(--color-ink-muted); margin: var(--space-4) 0 var(--space-2); text-transform: uppercase; letter-spacing: 0.04em; }
+.steps { list-style: none; margin: 0; padding: 0; counter-reset: step; }
+.steps > li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--space-3); padding: var(--space-3) 0; align-items: start; }
+.steps > li > span { min-width: 0; }
+.steps > li + li { border-top: 1px solid var(--color-border); }
+.step-num { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--color-ink-muted); padding-top: 3px; }
+.step-text { font-weight: 500; }
+.cmd {
+  display: flex; align-items: flex-start; gap: var(--space-2); margin-top: var(--space-2); min-width: 0;
+  background: var(--color-raised); border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm); padding: var(--space-2) var(--space-3);
+}
+.cmd code { font-family: var(--font-mono); font-size: var(--text-sm); flex: 1; min-width: 0; overflow-x: auto; white-space: pre; }
+.dx-foot { border-top: 1px solid var(--color-border); margin-top: var(--space-4); padding-top: var(--space-3); font-size: var(--text-sm); color: var(--color-ink-muted); display: flex; gap: var(--space-3); flex-wrap: wrap; }
+
+/* ---------- approval card ---------- */
+.approve-card { border-color: var(--color-border-strong); }
+.will-run { width: 100%; border-collapse: collapse; margin: var(--space-3) 0; }
+.will-run-wrap { overflow-x: auto; }
+.will-run th, .will-run td { text-align: left; padding: var(--space-3); border-bottom: 1px solid var(--color-border); font-size: var(--text-sm); }
+.will-run th { font-weight: 640; color: var(--color-ink-muted); }
+.will-run tbody tr:last-child td { border-bottom: 0; }
+.confirm { display: flex; gap: var(--space-3); align-items: flex-start; margin: var(--space-4) 0; cursor: pointer; }
+.confirm input { width: 20px; height: 20px; margin: 2px 0 0; accent-color: var(--color-accent); flex: none; cursor: pointer; }
+.confirm span { font-weight: 500; }
+.gate-note { margin-top: var(--space-3); }
+
+/* ---------- suggestions + composer ---------- */
+.composer-zone { flex: none; border-top: 1px solid var(--color-border); background: var(--color-bg); padding: var(--space-3) var(--space-4) var(--space-4); }
+.composer-inner { max-width: 860px; margin: 0 auto; }
+.suggestions { display: flex; gap: var(--space-2); flex-wrap: wrap; margin-bottom: var(--space-3); }
+.composer { display: flex; gap: var(--space-3); align-items: flex-end; }
+.composer textarea {
+  flex: 1; font: inherit; font-size: var(--text-base); resize: none;
+  padding: 11px var(--space-3); border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius); background: var(--color-surface); color: var(--color-ink);
+  line-height: 1.5; max-height: 160px; overflow-y: auto;
+}
+.composer textarea::placeholder { color: var(--color-ink-faint); }
+.composer textarea:focus { outline: 2.5px solid var(--color-secondary); outline-offset: 2px; border-color: var(--color-secondary); }
+.composer-hint { font-size: var(--text-sm); color: var(--color-ink-muted); margin-top: var(--space-2); }
+
+/* ---------- drawer ---------- */
+.drawer { border-left: 1px solid var(--color-border); background: var(--color-surface); display: flex; flex-direction: column; min-height: 0; }
+.drawer[hidden] { display: none !important; }
+.drawer-head { padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--color-border); flex: none; display: flex; align-items: center; gap: var(--space-3); }
+.drawer-head h2 { font-family: var(--font-display); font-size: var(--text-md); font-weight: 600; margin: 0; }
+.drawer-close { margin-left: auto; }
+.tabs { display: flex; gap: var(--space-1); padding: var(--space-2) var(--space-3) 0; border-bottom: 1px solid var(--color-border); flex: none; }
+.tab {
+  font: inherit; font-size: var(--text-sm); font-weight: 640; cursor: pointer;
+  background: transparent; border: 0; border-bottom: 2px solid transparent;
+  color: var(--color-ink-muted); padding: var(--space-2) var(--space-3);
+}
+.tab:hover { color: var(--color-ink); }
+.tab[aria-selected="true"] { color: var(--color-accent); border-bottom-color: var(--color-accent); }
+.drawer-body { overflow-y: auto; padding: var(--space-4); flex: 1; }
+.drawer-body h3 { font-family: var(--font-display); font-size: var(--text-md); font-weight: 600; margin: 0 0 var(--space-3); }
+.drawer-body h4 { font-size: var(--text-sm); font-weight: 640; color: var(--color-ink-muted); margin: var(--space-4) 0 var(--space-2); text-transform: uppercase; letter-spacing: 0.04em; }
+
+.logblock, .diffblock {
+  background: var(--color-raised); border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm); padding: var(--space-3); overflow-x: auto;
+  font-family: var(--font-mono); font-size: 13px; line-height: 1.6; margin: 0;
+}
+.logline { display: block; white-space: pre; color: var(--color-ink-muted); }
+.logline-hit { background: var(--color-danger-soft); color: #7B211C; font-weight: 600; border-radius: 3px; }
+.diff-add { display: block; white-space: pre; background: var(--color-success-soft); color: #1F4238; }
+.diff-del { display: block; white-space: pre; background: var(--color-danger-soft); color: #7B211C; }
+.diff-ctx { display: block; white-space: pre; color: var(--color-ink-muted); }
+.similar { border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: var(--space-3); margin-bottom: var(--space-2); }
+.similar-head { display: flex; align-items: baseline; gap: var(--space-2); }
+.score { margin-left: auto; font-family: var(--font-mono); font-size: var(--text-sm); color: var(--color-ink-muted); }
+
+.kv { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--space-2) var(--space-4); font-size: var(--text-sm); }
+.kv dt { color: var(--color-ink-muted); font-weight: 640; }
+.kv dd { margin: 0; overflow-wrap: anywhere; }
+
+/* ---------- responsive ---------- */
+.sla-short { display: none; }
+@media (max-width: 899px) {
+  .topbar { gap: var(--space-2); padding: var(--space-2) var(--space-3); }
+  .wordmark { font-size: var(--text-md); }
+  .topbar-sep { display: none; }
+  .tenant { font-size: 13px; }
+  .sla-long { display: none; }
+  .sla-short { display: inline; }
+  .demo-control { padding: 2px var(--space-2); }
+  .demo-control label { font-size: 12px; }
+  .demo-control select { font-size: 13px; }
+}
+.rail-toggle { display: none; }
+@media (max-width: 1439px) {
+  .app.has-drawer { grid-template-columns: 300px minmax(0, 1fr); }
+  .app.has-drawer .drawer {
+    position: fixed; top: 0; right: 0; bottom: 0; width: min(420px, 100vw);
+    z-index: 30; box-shadow: var(--shadow);
+  }
+}
+@media (max-width: 899px) {
+  .app, .app.has-drawer { grid-template-columns: minmax(0, 1fr); }
+  .rail {
+    position: fixed; top: 0; bottom: 0; left: 0; width: min(320px, 88vw);
+    z-index: 40; box-shadow: var(--shadow); transform: translateX(-101%);
+    transition: transform 180ms cubic-bezier(0.2,0.7,0.3,1);
+  }
+  .app.rail-open .rail { transform: translateX(0); }
+  .rail-toggle { display: inline-flex; }
+  .app.has-drawer .drawer { width: 100vw; }
+  .transcript { padding: var(--space-4) var(--space-3); }
+  .composer-zone { padding: var(--space-3); }
+}
+.scrim { display: none; }
+.app.rail-open .scrim, .app.has-drawer .scrim {
+  position: fixed; inset: 0; background: rgba(36,28,21,0.28); z-index: 20;
+}
+@media (min-width: 1440px) { .app.has-drawer .scrim { display: none; } }
+@media (min-width: 900px) { .app.rail-open .scrim { display: none; } }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
+}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <button class="btn btn-secondary btn-sm rail-toggle" id="railToggle" aria-expanded="false" aria-controls="rail">Incidents</button>
+  <h1 class="wordmark">Tri<span>a</span>ge</h1>
+  <span class="topbar-sep" aria-hidden="true">·</span>
+  <span class="tenant">tenant <strong id="tenantName">acme-retail</strong></span>
+  <!-- The page is deployed at app_url, where nothing else says it runs on mock
+       data. Someone landing on it should not have to guess. -->
+  <span class="topbar-sep" aria-hidden="true">·</span>
+  <span class="prototype-note" title="No backend is connected. Every incident, diagnosis and runbook on this page is fixture data.">prototype · mock data</span>
+
+  <div class="topbar-right">
+    <span class="badge badge-success" id="slaHealth"><span aria-hidden="true">✓</span> <span class="sla-long">Pipeline SLA healthy</span><span class="sla-short">SLA ok</span></span>
+    <div class="demo-control">
+      <label for="roleSelect">demo role</label>
+      <select id="roleSelect" aria-describedby="roleHint">
+        <option value="TenantAdmin">TenantAdmin</option>
+        <option value="TenantEngineer">TenantEngineer</option>
+        <option value="TenantLeadership">TenantLeadership</option>
+      </select>
+    </div>
+    <span id="roleHint" class="sr-only">Switches the signed-in role so the admin-only approval gate can be demonstrated. In production this comes from the Cognito group claim.</span>
+  </div>
+</header>
+
+<div class="app" id="app">
+
+  <nav class="rail" id="rail" aria-label="Incidents">
+    <div class="rail-head">
+      <h2 id="railHeading">Incidents</h2>
+      <div class="rail-search">
+        <input class="input" id="railSearch" type="search" placeholder="Filter by service or id" aria-label="Filter incidents">
+        <span class="kbd-hint kbd" aria-hidden="true">⌘K</span>
+      </div>
+    </div>
+    <!-- A plain group of buttons, not a listbox. As role="listbox" it had
+         non-option children (the section headers) and interactive buttons as
+         its options, neither of which ARIA permits, and it had no roving
+         tabindex or aria-activedescendant to make the pattern work. Native
+         buttons plus aria-current say the same thing correctly. -->
+    <div class="rail-list" id="railList" role="group" aria-labelledby="railHeading"></div>
+  </nav>
+
+  <main class="main">
+    <div class="transcript" id="transcript" tabindex="-1">
+      <!-- Deliberately NOT a live region. The typewriter mutates text inside
+           this container every 16ms and then replaces it wholesale, so
+           aria-live here made a screen reader read partial words repeatedly and
+           then re-read the finished turn. #srStatus is the single live region;
+           addAssistant announces each turn there once, complete. -->
+      <div class="transcript-inner" id="transcriptInner" role="log" aria-label="Conversation"></div>
+    </div>
+
+    <div class="composer-zone">
+      <div class="composer-inner">
+        <div class="suggestions" id="suggestions"></div>
+        <form class="composer" id="composerForm">
+          <label class="sr-only" for="composer">Ask about an incident</label>
+          <textarea id="composer" rows="1" placeholder="Ask about this incident…"></textarea>
+          <button class="btn btn-primary" type="submit" id="sendBtn">Send</button>
+        </form>
+        <p class="composer-hint">
+          <span class="kbd">Enter</span> send · <span class="kbd">Shift</span>+<span class="kbd">Enter</span> newline ·
+          <span class="kbd">/</span> focus · <span class="kbd">⌘K</span> filter · <span class="kbd">J</span>/<span class="kbd">K</span> move · <span class="kbd">Esc</span> close panel
+        </p>
+      </div>
+    </div>
+  </main>
+
+  <aside class="drawer" id="drawer" hidden aria-labelledby="drawerTitle">
+    <div class="drawer-head">
+      <h2 id="drawerTitle">Detail</h2>
+      <button class="btn btn-secondary btn-sm drawer-close" id="drawerClose">Close</button>
+    </div>
+    <div class="tabs" role="tablist" aria-label="Detail sections">
+      <button class="tab" role="tab" id="tab-runbook"  data-tab="runbook"  aria-selected="true"  aria-controls="drawerBody">Runbook</button>
+      <button class="tab" role="tab" id="tab-evidence" data-tab="evidence" aria-selected="false" aria-controls="drawerBody">Evidence</button>
+      <button class="tab" role="tab" id="tab-audit"    data-tab="audit"    aria-selected="false" aria-controls="drawerBody">Audit</button>
+    </div>
+    <div class="drawer-body" id="drawerBody" role="tabpanel" tabindex="0"></div>
+  </aside>
+
+  <div class="scrim" id="scrim"></div>
+</div>
+
+<p class="sr-only" id="srStatus" role="status" aria-live="polite"></p>
+
+<script>
+/* --- triage:lib start --- */
+/* Pure, DOM-free logic for the Incident Triage console.
+ *
+ * This file is the source of truth. The copy inlined into prototype.html is
+ * generated by `node frontend/sync-lib.mjs`, so that the prototype stays a
+ * single self-contained file you can open from disk while this logic stays
+ * unit-testable. `node --test frontend/test/` fails if the two drift apart.
+ */
+
+/* SLA budgets come straight from the BRD's non-functional requirements. */
+var SLA_BUDGET_MS = 5 * 60 * 1000; /* NFR-01: runbook delivered within 5 min */
+var SLA_WARN_AT_FRACTION = 0.8; /* warn with a fifth of the budget left */
+
+/* Severity maps onto the badge tones already defined in design/reference.html.
+ * Each carries a glyph and a word as well as a colour, so severity is never
+ * communicated by colour alone. */
+var SEVERITY = {
+  SEV1: { label: 'SEV1', tone: 'danger', glyph: '◆', text: 'Critical' },
+  SEV2: { label: 'SEV2', tone: 'warning', glyph: '▲', text: 'High' },
+  SEV3: { label: 'SEV3', tone: 'neutral', glyph: '●', text: 'Moderate' },
+  SEV4: { label: 'SEV4', tone: 'neutral', glyph: '○', text: 'Low' }
+};
+
+var SEVERITY_ALIASES = {
+  critical: 'SEV1', p1: 'SEV1', sev1: 'SEV1',
+  high: 'SEV2', major: 'SEV2', p2: 'SEV2', sev2: 'SEV2',
+  moderate: 'SEV3', medium: 'SEV3', warning: 'SEV3', p3: 'SEV3', sev3: 'SEV3',
+  low: 'SEV4', minor: 'SEV4', info: 'SEV4', p4: 'SEV4', sev4: 'SEV4'
+};
+
+function severityMeta(severity) {
+  var key = String(severity == null ? '' : severity).trim().toLowerCase();
+  var resolved = SEVERITY_ALIASES[key];
+  if (resolved) return SEVERITY[resolved];
+  return { label: 'UNKNOWN', tone: 'neutral', glyph: '○', text: 'Unclassified' };
+}
+
+/* Approval / execution state, mapped onto existing badge tones.
+ *
+ * These are two separate facts on the runbook row and the map covers both, because
+ * a single badge renders whichever one the caller has. `approval_status` records
+ * the human decision (pending / approved / declined); `execution_status` records
+ * what the remediation platform did (not_started / in_progress / succeeded /
+ * failed / skipped).
+ *
+ * The map used to carry `executed`, which no handler emits, and had no entry for
+ * any of the five execution_status values that are actually written -- so a
+ * successfully executed remediation rendered as "Unknown". */
+var APPROVAL = {
+  /* approval_status */
+  pending: { tone: 'warning', glyph: '○', text: 'Awaiting approval' },
+  approved: { tone: 'neutral', glyph: '◐', text: 'Approved, executing' },
+  declined: { tone: 'neutral', glyph: '—', text: 'Declined' },
+  /* execution_status */
+  not_started: { tone: 'idle', glyph: '·', text: 'Not started' },
+  in_progress: { tone: 'neutral', glyph: '◐', text: 'Executing' },
+  succeeded: { tone: 'success', glyph: '✓', text: 'Executed' },
+  failed: { tone: 'danger', glyph: '✕', text: 'Execution failed' },
+  /* C-02 again: no remediation platform configured is not a failure, but it is
+   * not success either -- someone still has to run the runbook by hand. */
+  skipped: { tone: 'warning', glyph: '⊘', text: 'Not executed — no platform configured' }
+};
+
+function approvalMeta(status) {
+  var key = String(status == null ? '' : status).trim().toLowerCase();
+  return APPROVAL[key] || { tone: 'neutral', glyph: '○', text: 'Unknown' };
+}
+
+/* Pipeline stages mirror the Step Functions state machine in spec/design.md. */
+var STAGE_TONES = {
+  pending: 'idle',
+  running: 'active',
+  done: 'success',
+  failed: 'danger',
+  skipped: 'warning'
+};
+
+function stageTone(status) {
+  return STAGE_TONES[String(status)] || 'idle';
+}
+
+/* A stage that is skipped still counts as resolved: C-02 says config data may
+ * simply not be available from a tenant's VCS, and that is not a failure. */
+function pipelineProgress(stages) {
+  if (!Array.isArray(stages) || stages.length === 0) return 0;
+  var resolved = 0;
+  for (var i = 0; i < stages.length; i++) {
+    var status = stages[i] && stages[i].status;
+    if (status === 'done' || status === 'skipped' || status === 'failed') resolved++;
+  }
+  return resolved / stages.length;
+}
+
+function pipelineIsComplete(stages) {
+  return pipelineProgress(stages) === 1;
+}
+
+function pipelineHasFailure(stages) {
+  if (!Array.isArray(stages)) return false;
+  return stages.some(function (s) { return s && s.status === 'failed'; });
+}
+
+/* mm:ss, or h:mm:ss once past an hour. Negative and non-finite clamp to 0:00 so
+ * a clock skew never renders "-1:-3". */
+function formatElapsed(ms) {
+  var total = Number(ms);
+  if (!isFinite(total) || total < 0) total = 0;
+  var seconds = Math.floor(total / 1000);
+  var hours = Math.floor(seconds / 3600);
+  var minutes = Math.floor((seconds % 3600) / 60);
+  var secs = seconds % 60;
+  var pad = function (n) { return n < 10 ? '0' + n : String(n); };
+  if (hours > 0) return hours + ':' + pad(minutes) + ':' + pad(secs);
+  return minutes + ':' + pad(secs);
+}
+
+/* The SLA budget bar. Tone escalates as the 5-minute budget is spent, so a
+ * long-running pipeline reads as "still fine" or "about to breach" at a glance
+ * rather than as an undifferentiated spinner. */
+function slaState(elapsedMs, budgetMs) {
+  var budget = Number(budgetMs);
+  if (!isFinite(budget) || budget <= 0) budget = SLA_BUDGET_MS;
+  var elapsed = Number(elapsedMs);
+  if (!isFinite(elapsed) || elapsed < 0) elapsed = 0;
+
+  /* One rule for every budget. The special case this replaces computed the
+     same number twice over: 4:00 is exactly 0.8 x 5:00. */
+  var warnAt = budget * SLA_WARN_AT_FRACTION;
+  var tone = 'ok';
+  if (elapsed > budget) tone = 'danger';
+  else if (elapsed >= warnAt) tone = 'warning';
+
+  return {
+    pct: Math.max(0, Math.min(100, (elapsed / budget) * 100)),
+    tone: tone,
+    breached: elapsed > budget,
+    remainingMs: Math.max(0, budget - elapsed),
+    budgetMs: budget
+  };
+}
+
+/* Authorisation. Requirement 7 gives approval authority to TenantAdmin alone.
+ * The UI asks this before rendering the button so a non-admin sees a disabled
+ * control with a reason, rather than clicking into a 403. */
+var APPROVER_GROUP = 'TenantAdmin';
+var KNOWN_ROLES = ['TenantAdmin', 'TenantEngineer', 'TenantLeadership'];
+
+function canApprove(role) {
+  return String(role) === APPROVER_GROUP;
+}
+
+function approvalBlockReason(role) {
+  if (canApprove(role)) return null;
+  if (KNOWN_ROLES.indexOf(String(role)) !== -1) {
+    return 'Approval is restricted to Tenant Admins. Ask an admin on your team to review and approve this runbook.';
+  }
+  return 'Your session does not carry a recognised role. Sign in again to approve remediation.';
+}
+
+/* Tenant isolation (Requirement 6.3 / C-01). The client refuses to render a
+ * resource whose tenant does not match the session, so a mis-scoped API
+ * response surfaces as a visible denial instead of leaking across tenants. */
+function isTenantMatch(sessionTenantId, resourceTenantId) {
+  if (!sessionTenantId || !resourceTenantId) return false;
+  return String(sessionTenantId) === String(resourceTenantId);
+}
+
+/* Identifiers the user might paste or type. */
+function extractIds(text) {
+  var source = String(text == null ? '' : text);
+  var alerts = source.match(/\bALT-\d{3,}\b/gi) || [];
+  var runbooks = source.match(/\bRB-\d{3,}\b/gi) || [];
+  var upper = function (s) { return s.toUpperCase(); };
+  return { alertIds: alerts.map(upper), runbookIds: runbooks.map(upper) };
+}
+
+/* Intent routing.
+ *
+ * In production this is Bedrock tool-use inside fn-chat; here it stands in for
+ * the model and also drives the prototype. `approve` is deliberately NOT an
+ * executable intent: it resolves to `focus_approval`, which scrolls to the
+ * approval card and focuses it. Typed text never triggers remediation. */
+function routeIntent(text) {
+  var raw = String(text == null ? '' : text).trim();
+  var q = raw.toLowerCase();
+  var ids = extractIds(raw);
+  var params = {};
+  if (ids.alertIds.length) params.alertId = ids.alertIds[0];
+  if (ids.runbookIds.length) params.runbookId = ids.runbookIds[0];
+
+  if (!q) return { intent: 'noop', params: params };
+
+  /* Safety first: anything that smells like an approval command is routed to
+   * the card, never to an action. */
+  if (/\b(approve|authorise|authorize|execute|run it|go ahead|do it|ship it)\b/.test(q)) {
+    return { intent: 'focus_approval', params: params };
+  }
+  if (/\b(decline|reject|cancel|abort|don't|stop)\b/.test(q)) {
+    return { intent: 'focus_approval', params: params };
+  }
+  if (/\b(runbook|step|remediat|fix|playbook)/.test(q)) {
+    return { intent: 'show_runbook', params: params };
+  }
+  if (/\b(chang|commit|deploy|diff|git|release|rollback|rolled back)/.test(q)) {
+    return { intent: 'show_changes', params: params };
+  }
+  if (/\b(log|trace|stack|error|exception|throw)/.test(q)) {
+    return { intent: 'show_logs', params: params };
+  }
+  if (/\b(audit|who approved|history|trail)/.test(q)) {
+    return { intent: 'show_audit', params: params };
+  }
+  if (/\b(status|progress|how long|eta|done yet|finished)/.test(q)) {
+    return { intent: 'pipeline_status', params: params };
+  }
+  if (/\b(list|open|active|incident|alert)\b|what(?:'s| is| are)? *(going on|broken|happening|down|failing|on fire)/.test(q)) {
+    return { intent: 'list_incidents', params: params };
+  }
+  if (/\b(why|root cause|what happened|cause|diagnos|rca)/.test(q)) {
+    return { intent: 'show_diagnosis', params: params };
+  }
+  if (/\b(export|download|json|api)/.test(q)) {
+    return { intent: 'export_runbook', params: params };
+  }
+  if (/\b(help|what can you|how do i)/.test(q)) {
+    return { intent: 'help', params: params };
+  }
+  if (params.alertId || params.runbookId) {
+    return { intent: 'show_diagnosis', params: params };
+  }
+  return { intent: 'unknown', params: params };
+}
+
+/* Redaction for anything echoed out of a customer's logs.
+ *
+ * docs/brd.md flags application logs as possibly containing usernames, session
+ * IDs and request data. IPs keep their first two octets because an operator
+ * genuinely needs to know which subnet a host sits in. */
+function redact(text) {
+  return String(text == null ? '' : text)
+    .replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, '‹redacted:email›')
+    .replace(/\b(AKIA|ASIA)[0-9A-Z]{16}\b/g, '‹redacted:aws-key›')
+    .replace(/\b(bearer|token|authorization)\s*[:=]?\s*[A-Za-z0-9._~+/-]{12,}=*/gi, '‹redacted:credential›')
+    .replace(/\b([0-9]{1,3}\.[0-9]{1,3})\.[0-9]{1,3}\.[0-9]{1,3}\b/g, '$1.x.x')
+    .replace(/\b[0-9a-f]{32,}\b/gi, '‹redacted:token›');
+}
+
+/* Redaction for a whole record's worth of free text.
+ *
+ * Change history needs this as much as log output does: a config diff is the
+ * single most likely place a token or a connection string appears, and the
+ * Evidence panel tells the operator that everything in it has been redacted. */
+function redactAll(values) {
+  return (values || []).map(redact);
+}
+
+/* Relative time for the incident rail. Short, because the rail is narrow. */
+function relativeTime(fromMs, nowMs) {
+  var now = Number(nowMs);
+  if (!isFinite(now)) now = Date.now();
+  var delta = now - Number(fromMs);
+  if (!isFinite(delta) || delta < 0) delta = 0;
+  var mins = Math.floor(delta / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return mins + 'm ago';
+  var hours = Math.floor(mins / 60);
+  if (hours < 24) return hours + 'h ago';
+  var days = Math.floor(hours / 24);
+  return days + 'd ago';
+}
+
+/* Escaping, because every card renders customer-controlled strings (service
+ * names, log lines, commit messages) into the DOM. */
+function escapeHtml(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+/* Prose that is allowed a little inline emphasis, and nothing else.
+ *
+ * The narrative fields — the one-line cause, the reasoning paragraphs, the
+ * remediation step text — are written with <strong>, <em> and <code> in them,
+ * and in the deployed system they arrive from Bedrock rather than from a
+ * trusted author. Escaping them wholesale would print the tags; interpolating
+ * them raw, which is what the render functions used to do, makes every one of
+ * them an injection point for model output.
+ *
+ * So: escape everything, then re-permit exactly these tags, with no attributes.
+ * `<code onclick=...>` stays escaped, because the pattern only matches a tag
+ * name followed by an optional slash and the closing bracket. */
+var INLINE_TAGS = /&lt;(\/?)(strong|em|code|b|i|br)\s*\/?&gt;/gi;
+
+function richText(value) {
+  return escapeHtml(value).replace(INLINE_TAGS, function (match, slash, tag) {
+    return '<' + slash + tag.toLowerCase() + '>';
+  });
+}
+
+/* --- triage:lib end --- */
+
+/* ============================================================
+   Prototype application.
+
+   Everything below is presentation plus a scripted scenario engine over
+   mock data. There are no network calls: in production each card is fed by
+   the endpoints in spec/design.md (POST /v1/chat for the conversation,
+   GET /v1/diagnostics/{alertId}, GET /v1/runbooks/{runbookId},
+   POST /v1/runbooks/{runbookId}/approve), and the pipeline card is driven
+   by the Step Functions execution state.
+   ============================================================ */
+
+var params = new URLSearchParams(location.search);
+var SCENE = params.get('state') || '';
+/* Clamped: a negative ?speed made elapsed() go backwards, so the pipeline
+   never advanced and the clock sat frozen at 0:00 with no explanation. */
+var SPEED = Math.min(600, Math.max(1, Number(params.get('speed')) || 15));
+/* Guarded: an environment without matchMedia (an older embedded webview, a
+   test harness) would otherwise throw here and render nothing at all. */
+var REDUCED = typeof window.matchMedia === 'function'
+  && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+var NOW = Date.now();
+
+var state = {
+  generation: 0,   /* bumped on every incident switch; stale callbacks check it */
+  timers: [],      /* setTimeout ids owned by the current view */
+  intervals: [],   /* setInterval ids owned by the current view */
+  tenantId: 'acme-retail',
+  role: 'TenantAdmin',
+  selectedId: null,
+  drawerTab: 'runbook',
+  drawerReturnFocus: null,
+  filter: '',
+  live: null,      /* the running pipeline controller, if any */
+  force403: false  /* ?state=403 lets the click through to show the server refusal */
+};
+
+/* ---------- mock data ---------- */
+
+function step(text, cmd, priority) { return { text: text, cmd: cmd, priority: priority }; }
+
+var MOCK = [
+  {
+    id: 'ALT-1041', tenantId: 'acme-retail', severity: 'SEV1', service: 'checkout-api',
+    title: 'Checkout API 5xx rate above 20% for 4 minutes', source: 'PagerDuty',
+    receivedAt: NOW - 2 * 60000, state: 'fresh', variant: 'nominal',
+    diagnosis: {
+      cause: 'A connection-pool ceiling introduced 38 minutes ago is exhausting under normal checkout load.',
+      body: [
+        'Deployment <strong>d-8841</strong> shipped commit <strong>4f2ac91</strong> at 03:14, which lowered <code>DB_POOL_MAX</code> from 40 to 8 while leaving the request concurrency limit untouched.',
+        'From 03:19 the checkout service began returning 503 as soon as the ninth concurrent request arrived. The 5xx curve tracks the deployment exactly, and every failing trace terminates in <code>TimeoutError: pool exhausted</code> rather than in a downstream dependency.',
+        'The database itself is healthy: connection count, CPU and replica lag are all flat across the window, which rules out the DB-side saturation this alert pattern usually implies.'
+      ],
+      confidence: 'High', model: 'claude-haiku-4-5', generatedAt: '03:56 UTC',
+      steps: [
+        step('Restore the connection-pool ceiling to its pre-deployment value.', 'kubectl set env deploy/checkout-api DB_POOL_MAX=40 -n prod', 'P1'),
+        step('Confirm the 5xx rate falls below 1% within two minutes.', 'watch -n15 \'curl -s localhost:9090/api/v1/query --data-urlencode "query=rate(http_5xx[2m])"\'', 'P1'),
+        step('Roll back deployment d-8841 if the override does not hold.', 'kubectl rollout undo deploy/checkout-api -n prod', 'P2'),
+        step('Drain the 214 checkout sessions that failed during the window back onto the retry queue.', 'node scripts/replay-failed-checkouts.mjs --since 03:19Z', 'P2'),
+        step('Add a guard so pool size cannot drop below request concurrency in review.', null, 'P3')
+      ]
+    },
+    runbook: {
+      id: 'RB-2294', title: 'Restore checkout-api connection pool', approvalStatus: 'pending',
+      actions: [
+        { action: 'Set DB_POOL_MAX=40 on checkout-api', target: 'prod cluster (Ansible Tower)', blast: '1 deployment, 6 pods, rolling' },
+        { action: 'Verify 5xx rate below 1%', target: 'Prometheus (read-only)', blast: 'None — read only' },
+        { action: 'Replay 214 failed checkout sessions', target: 'checkout retry queue', blast: '214 orders re-queued' }
+      ]
+    },
+    evidence: {
+      logs: [
+        { text: '03:18:58  checkout-api  INFO   pool acquired conn=7/8 wait=2ms' },
+        { text: '03:19:02  checkout-api  WARN   pool wait exceeded 500ms conn=8/8 queued=3', hit: true },
+        { text: '03:19:02  checkout-api  ERROR  TimeoutError: pool exhausted after 5000ms', hit: true },
+        { text: '03:19:02  checkout-api  ERROR    at PoolManager.acquire (/app/db/pool.js:118)' },
+        { text: '03:19:03  checkout-api  ERROR  POST /v1/checkout 503 5021ms user=ada@example.com ip=10.4.19.220', hit: true },
+        { text: '03:19:03  postgres-primary  INFO  connections=8/200 cpu=11% replica_lag=0.2s' },
+        { text: '03:19:44  checkout-api  ERROR  TimeoutError: pool exhausted after 5000ms  (x214)', hit: true }
+      ],
+      changes: [{
+        sha: '4f2ac91', author: 'platform-bot', when: '03:14 UTC, 38 min before the alert',
+        message: 'chore: tune connection pools for cost review (#2288)',
+        diff: [
+          { k: ' ', text: '  checkout-api:' },
+          { k: ' ', text: '    env:' },
+          { k: '-', text: '-     DB_POOL_MAX: 40' },
+          { k: '+', text: '+     DB_POOL_MAX: 8' },
+          { k: ' ', text: '      REQUEST_CONCURRENCY: 32' }
+        ]
+      }],
+      similar: [
+        { id: 'ALT-0917', title: 'Orders API 503s after pool retune', when: '6 weeks ago', score: 0.94, outcome: 'Resolved by restoring pool size. MTTR 41 min.' },
+        { id: 'ALT-0742', title: 'Cart service timeouts under normal load', when: '4 months ago', score: 0.88, outcome: 'Same shape; guard added to review checklist but not enforced.' },
+        { id: 'ALT-0688', title: 'Checkout latency spike after config change', when: '5 months ago', score: 0.81, outcome: 'Rolled back deployment. MTTR 1 h 12 m.' }
+      ]
+    },
+    audit: []
+  },
+
+  {
+    id: 'ALT-1039', tenantId: 'acme-retail', severity: 'SEV2', service: 'auth-api',
+    title: 'Token refresh latency p99 above 3s', source: 'Opsgenie',
+    receivedAt: NOW - 14 * 60000, state: 'complete', variant: 'nominal',
+    diagnosis: {
+      cause: 'A missing index on the refresh-token table turns every refresh into a full scan as the table grows.',
+      body: [
+        'The <code>refresh_tokens</code> table crossed 4.1 million rows overnight. The lookup on <code>(user_id, revoked_at)</code> has no covering index, so p99 latency has been climbing linearly with row count for nine days rather than spiking.',
+        'No configuration or deployment change precedes this alert, which is consistent with gradual data growth rather than a regression.'
+      ],
+      confidence: 'High', model: 'claude-haiku-4-5', generatedAt: '03:44 UTC',
+      steps: [
+        step('Create the covering index concurrently so writes keep flowing.', 'CREATE INDEX CONCURRENTLY idx_refresh_user_active ON refresh_tokens (user_id, revoked_at);', 'P1'),
+        step('Purge revoked tokens older than 30 days.', 'psql -c "DELETE FROM refresh_tokens WHERE revoked_at < now() - interval \'30 days\'"', 'P2'),
+        step('Schedule the purge nightly so the table stops growing unbounded.', null, 'P3')
+      ]
+    },
+    runbook: {
+      id: 'RB-2291', title: 'Index and prune refresh-token table', approvalStatus: 'pending',
+      actions: [
+        { action: 'CREATE INDEX CONCURRENTLY on refresh_tokens', target: 'auth-db primary (RDS)', blast: 'Online; no write lock' },
+        { action: 'DELETE revoked tokens older than 30 days', target: 'auth-db primary (RDS)', blast: '≈ 2.6 M rows deleted, irreversible' }
+      ]
+    },
+    evidence: {
+      logs: [
+        { text: '03:41:12  auth-api  WARN  slow query 3184ms SELECT * FROM refresh_tokens WHERE user_id=$1', hit: true },
+        { text: '03:41:12  auth-api  INFO  rows_scanned=4118442 rows_returned=1', hit: true },
+        { text: '03:41:19  auth-api  WARN  token refresh p99=3.2s (threshold 1.0s)', hit: true }
+      ],
+      changes: [],
+      similar: [{ id: 'ALT-0801', title: 'Session lookup degradation', when: '3 months ago', score: 0.90, outcome: 'Index added; p99 returned to 120 ms.' }]
+    },
+    audit: []
+  },
+
+  {
+    id: 'ALT-1036', tenantId: 'acme-retail', severity: 'SEV3', service: 'cdn-edge',
+    title: 'Cache hit ratio dropped from 94% to 61%', source: 'Prometheus AlertManager',
+    receivedAt: NOW - 66 * 60000, state: 'complete', variant: 'degraded',
+    diagnosis: {
+      cause: 'Cache keys began including a per-request header, which fragments the object cache. Cause is likely but unconfirmed.',
+      body: [
+        'Edge logs show the same asset stored under many distinct cache keys from 02:05, each varying by a <code>X-Client-Variant</code> header value. That fragmentation alone accounts for the ratio drop.',
+        '<strong>This diagnosis is not grounded in configuration history.</strong> Config and VCS correlation was skipped for this incident, so the change that introduced the header could not be identified. Treat the cause as probable rather than confirmed, and confirm against your own deployment log before acting.'
+      ],
+      confidence: 'Medium — config correlation unavailable', model: 'claude-haiku-4-5', generatedAt: '02:59 UTC',
+      steps: [
+        step('Remove X-Client-Variant from the cache key allowlist at the edge.', 'edgectl cache-key remove-header X-Client-Variant --zone prod', 'P1'),
+        step('Confirm which deployment introduced the header, by hand — automated VCS correlation was unavailable.', null, 'P1'),
+        step('Purge fragmented objects so the ratio recovers immediately.', 'edgectl purge --pattern "/assets/*" --zone prod', 'P2')
+      ]
+    },
+    runbook: {
+      id: 'RB-2288', title: 'Restore edge cache key configuration', approvalStatus: 'pending',
+      actions: [
+        { action: 'Remove header from cache-key allowlist', target: 'edge zone prod (edgectl API)', blast: 'All edge POPs, propagates in ~90s' },
+        { action: 'Purge /assets/* objects', target: 'edge zone prod', blast: 'Origin load spike expected for ~5 min' }
+      ]
+    },
+    evidence: {
+      logs: [
+        { text: '02:05:41  cdn-edge  INFO  MISS key=/assets/app.js|variant=a  size=482kb', hit: true },
+        { text: '02:05:41  cdn-edge  INFO  MISS key=/assets/app.js|variant=b  size=482kb', hit: true },
+        { text: '02:05:42  cdn-edge  INFO  MISS key=/assets/app.js|variant=c  size=482kb', hit: true },
+        { text: '02:06:10  cdn-edge  WARN  hit_ratio=0.61 window=5m (baseline 0.94)', hit: true }
+      ],
+      changes: [],
+      similar: [{ id: 'ALT-0655', title: 'Cache fragmentation after header change', when: '7 months ago', score: 0.86, outcome: 'Header removed from cache key. Ratio recovered in 20 min.' }]
+    },
+    audit: []
+  },
+
+  {
+    id: 'ALT-1030', tenantId: 'acme-retail', severity: 'SEV2', service: 'payments-api',
+    title: 'Webhook delivery backlog above 10,000', source: 'PagerDuty',
+    receivedAt: NOW - 190 * 60000, state: 'complete', variant: 'nominal',
+    diagnosis: {
+      cause: 'A single failing merchant endpoint held the shared delivery worker pool, backing up every other tenant.',
+      body: ['One merchant endpoint began timing out at 30s per attempt at 00:12. With no per-endpoint circuit breaker, retries occupied all 12 shared workers and the backlog grew for every merchant behind them.'],
+      confidence: 'High', model: 'claude-haiku-4-5', generatedAt: '00:31 UTC',
+      steps: [
+        step('Circuit-break the failing endpoint so workers are released.', 'payctl endpoint disable merchant_88213 --reason timeout', 'P1'),
+        step('Scale delivery workers to drain the backlog.', 'kubectl scale deploy/webhook-worker --replicas=24 -n prod', 'P1'),
+        step('Add per-endpoint concurrency caps so one merchant cannot starve the pool.', null, 'P3')
+      ]
+    },
+    runbook: {
+      id: 'RB-2283', title: 'Release webhook worker pool', approvalStatus: 'executed',
+      actions: [
+        { action: 'Disable endpoint merchant_88213', target: 'payments control plane', blast: '1 merchant, deliveries paused' },
+        { action: 'Scale webhook-worker to 24 replicas', target: 'prod cluster (Ansible Tower)', blast: '12 additional pods' }
+      ]
+    },
+    evidence: {
+      logs: [
+        { text: '00:12:04  payments-api  WARN  delivery timeout endpoint=merchant_88213 attempt=1 30001ms', hit: true },
+        { text: '00:14:55  payments-api  ERROR backlog=10412 workers_busy=12/12', hit: true }
+      ],
+      changes: [],
+      similar: [{ id: 'ALT-0498', title: 'Webhook backlog from single slow consumer', when: '9 months ago', score: 0.92, outcome: 'Endpoint disabled; caps added later.' }]
+    },
+    audit: [{
+      actor: 'priya.raman (TenantAdmin)', when: '00:36 UTC today', action: 'approve + execute RB-2283',
+      result: 'success', target: 'Ansible Tower (prod)',
+      ims: SCENE === 'ims-failed'
+        ? { ok: false, text: 'Incident Management System notification failed (503 from the configured endpoint). Logged and retried once; the remediation itself was unaffected.' }
+        : { ok: true, text: 'ServiceNow INC0094412 updated with findings and runbook link.' }
+    }]
+  },
+
+  {
+    id: 'ALT-1021', tenantId: 'acme-retail', severity: 'SEV1', service: 'search-api',
+    title: 'Search cluster unreachable from all regions', source: 'Prometheus AlertManager',
+    receivedAt: NOW - 320 * 60000, state: 'failed', variant: 'failed',
+    diagnosis: null, runbook: null,
+    evidence: {
+      logs: [
+        { text: '22:40:11  search-api  ERROR  all 3 coordinator nodes unreachable', hit: true },
+        { text: '22:40:12  search-api  ERROR  connect ETIMEDOUT 10.7.44.19:9200', hit: true }
+      ],
+      changes: [], similar: []
+    },
+    audit: []
+  }
+];
+
+/* ---------- pipeline timelines ---------- */
+
+function baseStages() {
+  return [
+    { key: 'ingest',  label: 'Alert ingested and normalised',              status: 'pending' },
+    { key: 'logs',    label: 'Correlate logs',                             status: 'pending', parallel: true },
+    { key: 'config',  label: 'Correlate configuration and VCS changes',    status: 'pending', parallel: true },
+    { key: 'rag',     label: 'Retrieve similar incidents',                 status: 'pending' },
+    { key: 'rca',     label: 'Generate root cause and remediation',        status: 'pending' },
+    { key: 'runbook', label: 'Render runbook',                             status: 'pending' }
+  ];
+}
+
+var TIMELINES = {
+  nominal: [
+    { at: 0,      set: [{ k: 'ingest', status: 'running' }] },
+    { at: 4000,   set: [
+      { k: 'ingest', status: 'done', dur: 4000, detail: 'Signature verified, deduplicated on alert_id, Alerts row written.' },
+      { k: 'logs', status: 'running' }, { k: 'config', status: 'running' }
+    ] },
+    { at: 42000,  set: [{ k: 'config', status: 'done', dur: 38000, detail: '3 commits and 1 deployment in the 40 minutes before the alert.' }] },
+    { at: 56000,  set: [
+      { k: 'logs', status: 'done', dur: 52000, detail: '1,284 matching lines in the 15-minute window, cached to S3.' },
+      { k: 'rag', status: 'running' }
+    ] },
+    { at: 87000,  set: [
+      { k: 'rag', status: 'done', dur: 31000, detail: 'Embedded 2,048 characters; 4 similar incidents in this tenant’s namespace.' },
+      { k: 'rca', status: 'running' }
+    ] },
+    { at: 135000, set: [
+      { k: 'rca', status: 'done', dur: 48000, detail: 'claude-haiku-4-5 produced a root cause and 5 prioritised steps.' },
+      { k: 'runbook', status: 'running' }
+    ] },
+    { at: 162000, set: [{ k: 'runbook', status: 'done', dur: 27000, detail: '{RUNBOOK} stored to S3; runbook-ready published to SNS.' }] }
+  ],
+  degraded: [
+    { at: 0,      set: [{ k: 'ingest', status: 'running' }] },
+    { at: 4000,   set: [
+      { k: 'ingest', status: 'done', dur: 4000, detail: 'Signature verified, deduplicated on alert_id, Alerts row written.' },
+      { k: 'logs', status: 'running' }, { k: 'config', status: 'running' }
+    ] },
+    { at: 19000,  set: [{ k: 'config', status: 'skipped', dur: 15000, detail: 'Tenant VCS credentials rejected (401). Config correlation skipped — the diagnosis below is not grounded in change history.' }] },
+    { at: 58000,  set: [
+      { k: 'logs', status: 'done', dur: 54000, detail: '2,140 matching lines in the 20-minute window, cached to S3.' },
+      { k: 'rag', status: 'running' }
+    ] },
+    { at: 88000,  set: [
+      { k: 'rag', status: 'done', dur: 30000, detail: '1 similar incident found; confidence reduced without change history.' },
+      { k: 'rca', status: 'running' }
+    ] },
+    { at: 128000, set: [
+      { k: 'rca', status: 'done', dur: 40000, detail: 'claude-haiku-4-5 produced a probable cause and 3 prioritised steps.' },
+      { k: 'runbook', status: 'running' }
+    ] },
+    { at: 141000, set: [{ k: 'runbook', status: 'done', dur: 13000, detail: '{RUNBOOK} stored to S3; runbook-ready published to SNS.' }] }
+  ],
+  breach: [
+    { at: 0,      set: [{ k: 'ingest', status: 'running' }] },
+    { at: 6000,   set: [
+      { k: 'ingest', status: 'done', dur: 6000, detail: 'Signature verified, deduplicated on alert_id, Alerts row written.' },
+      { k: 'logs', status: 'running' }, { k: 'config', status: 'running' }
+    ] },
+    { at: 64000,  set: [{ k: 'config', status: 'done', dur: 58000, detail: '3 commits and 1 deployment in the 40 minutes before the alert.' }] },
+    { at: 196000, set: [
+      { k: 'logs', status: 'done', dur: 190000, attempts: 3, detail: 'Log platform throttled twice; succeeded on attempt 3. Exceeded the 60-second correlation target (NFR-05).' },
+      { k: 'rag', status: 'running' }
+    ] },
+    { at: 232000, set: [
+      { k: 'rag', status: 'done', dur: 36000, detail: 'Embedded 2,048 characters; 4 similar incidents found.' },
+      { k: 'rca', status: 'running' }
+    ] },
+    { at: 314000, set: [
+      { k: 'rca', status: 'done', dur: 82000, attempts: 2, detail: 'Bedrock throttled once; succeeded on attempt 2.' },
+      { k: 'runbook', status: 'running' }
+    ] },
+    { at: 338000, set: [{ k: 'runbook', status: 'done', dur: 24000, detail: '{RUNBOOK} stored to S3, 38 seconds past the 5-minute budget.' }] }
+  ],
+  failed: [
+    { at: 0,      set: [{ k: 'ingest', status: 'running' }] },
+    { at: 5000,   set: [
+      { k: 'ingest', status: 'done', dur: 5000, detail: 'Signature verified, deduplicated on alert_id, Alerts row written.' },
+      { k: 'logs', status: 'running' }, { k: 'config', status: 'running' }
+    ] },
+    { at: 48000,  set: [{ k: 'config', status: 'done', dur: 43000, detail: 'No changes in the 2 hours before the alert.' }] },
+    { at: 71000,  set: [
+      { k: 'logs', status: 'failed', dur: 66000, attempts: 3, detail: 'Log platform unreachable after 3 attempts with exponential backoff. Execution routed to the DLQ for redrive.' }
+    ] }
+  ]
+};
+
+/* Pre-seed the stage list for an already-finished incident. */
+function stageDetail(text, incident) {
+  if (!text) return text;
+  var rbId = (incident && incident.runbook && incident.runbook.id) || 'The runbook';
+  return text.replace('{RUNBOOK}', rbId);
+}
+
+function finishedStages(variant, incident) {
+  var stages = baseStages();
+  var events = TIMELINES[variant] || TIMELINES.nominal;
+  events.forEach(function (ev) {
+    ev.set.forEach(function (s) {
+      var stage = stages.find(function (x) { return x.key === s.k; });
+      if (!stage) return;
+      if (s.status !== 'running') {
+        stage.status = s.status;
+        stage.detail = stageDetail(s.detail, incident);
+        stage.dur = s.dur;
+        stage.attempts = s.attempts;
+      }
+    });
+  });
+  stages.forEach(function (s) { if (s.status === 'pending') s.status = 'skipped'; });
+  return stages;
+}
+
+function timelineTotal(variant) {
+  var events = TIMELINES[variant] || TIMELINES.nominal;
+  return events[events.length - 1].at;
+}
+
+/* ---------- tiny DOM helpers ---------- */
+
+function $(id) { return document.getElementById(id); }
+
+/* Every deferred callback is stamped with the generation that scheduled it.
+ *
+ * Switching incidents used to leave in-flight timers running: the typewriter's
+ * interval, the 400ms card cascade, the remediation call. Their callbacks then
+ * appended the OLD incident's cards into the NEW incident's transcript, and
+ * startPipeline overwrote state.live with a controller for the wrong incident.
+ * selectIncident bumps the generation; anything stale is dropped. */
+function currentGeneration() { return state.generation; }
+
+function isStale(generation) { return generation !== state.generation; }
+
+/* setTimeout that does nothing if the view moved on. */
+function later(fn, ms) {
+  var generation = state.generation;
+  var id = setTimeout(function () {
+    if (isStale(generation)) return;
+    fn();
+  }, ms);
+  state.timers.push(id);
+  return id;
+}
+
+function cancelPendingWork() {
+  state.generation++;
+  state.timers.forEach(clearTimeout);
+  state.timers = [];
+  state.intervals.forEach(clearInterval);
+  state.intervals = [];
+}
+
+function el(html) {
+  var t = document.createElement('template');
+  t.innerHTML = html.trim();
+  return t.content.firstElementChild;
+}
+
+function announce(text) {
+  $('srStatus').textContent = text;
+}
+
+/* Copy to clipboard, with the two things the previous version got wrong.
+ *
+ * The original label is stashed on the element rather than read from it: two
+ * clicks inside the reset window captured "Copied" as the label to restore, so
+ * the button stayed "Copied" for good. And writeText's promise is handled —
+ * it rejects outside a secure context, which includes the file:// URL this
+ * prototype is documented to be opened from, so an unhandled rejection was the
+ * normal case rather than the edge one. */
+function copyCommand(button) {
+  var value = button.dataset.copy;
+  if (!button.dataset.label) button.dataset.label = button.textContent;
+
+  var restore = function (message) {
+    button.textContent = message;
+    announce(message === 'Copied' ? 'Command copied to the clipboard.' : 'Could not copy — select the command and copy it manually.');
+    setTimeout(function () { button.textContent = button.dataset.label; }, 1200);
+  };
+
+  if (!navigator.clipboard) return restore('Copy failed');
+  navigator.clipboard.writeText(value).then(
+    function () { restore('Copied'); },
+    function () { restore('Copy failed'); }
+  );
+}
+
+function scrollTranscript() {
+  var t = $('transcript');
+  t.scrollTop = t.scrollHeight;
+}
+
+function badge(tone, glyph, text) {
+  return '<span class="badge badge-' + tone + '"><span aria-hidden="true">' + glyph + '</span> ' + escapeHtml(text) + '</span>';
+}
+
+/* ---------- transcript turns ---------- */
+
+function addNode(node) {
+  $('transcriptInner').appendChild(node);
+  scrollTranscript();
+  return node;
+}
+
+function addUser(text) {
+  return addNode(el('<div class="turn-user">' + escapeHtml(text) + '</div>'));
+}
+
+/* Streams text in, unless the viewer asked for reduced motion. */
+function addAssistant(html, opts) {
+  opts = opts || {};
+  var node = addNode(el('<div class="turn-assistant' + (opts.wide ? ' turn-wide' : '') + '"></div>'));
+  if (REDUCED || opts.instant) {
+    node.innerHTML = html;
+    announce(html.replace(/<[^>]+>/g, ''));
+    scrollTranscript();
+    if (opts.done) opts.done();
+    return node;
+  }
+  /* Reveal by character but only commit whole HTML at the end, so a partially
+     written tag never renders as visible markup. */
+  var plain = html.replace(/<[^>]+>/g, '');
+  var i = 0;
+  var generation = currentGeneration();
+  var caret = el('<span class="caret" aria-hidden="true"></span>');
+  node.appendChild(document.createTextNode(''));
+  node.appendChild(caret);
+  var timer = setInterval(function () {
+    if (isStale(generation)) { clearInterval(timer); return; }
+    i += 3;
+    node.firstChild.textContent = plain.slice(0, i);
+    scrollTranscript();
+    if (i >= plain.length) {
+      clearInterval(timer);
+      node.innerHTML = html;
+      /* Announce once, complete, rather than letting the live region read out
+         every 16ms frame of the reveal. */
+      announce(plain);
+      scrollTranscript();
+      if (opts.done) opts.done();
+    }
+  }, 16);
+  state.intervals.push(timer);
+  return node;
+}
+
+function addToolChip(text) {
+  var node = addNode(el(
+    '<div><span class="tool-chip"><span class="spin" aria-hidden="true">◐</span> ' + escapeHtml(text) + '</span></div>'
+  ));
+  return {
+    resolve: function (finalText) {
+      node.innerHTML = '<span class="tool-chip"><span aria-hidden="true">✓</span> ' + escapeHtml(finalText) + '</span>';
+    },
+    remove: function () { node.remove(); }
+  };
+}
+
+/* ---------- pipeline card ---------- */
+
+function renderStage(stage) {
+  var tone = stageTone(stage.status);
+  var glyph = { idle: '○', active: '◐', success: '✓', danger: '✕', warning: '⃠' }[tone];
+  var statusWord = { pending: 'not started', running: 'running', done: 'done', skipped: 'skipped', failed: 'failed' }[stage.status];
+  var spin = stage.status === 'running' ? ' spin' : '';
+  return '' +
+    '<li class="stage stage-' + tone + (stage.parallel ? ' stage-parallel' : '') + '" data-stage="' + stage.key + '">' +
+      '<span class="stage-glyph"><span class="' + spin.trim() + '" aria-hidden="true">' + glyph + '</span></span>' +
+      '<span>' +
+        '<span class="stage-label">' + escapeHtml(stage.label) + '</span>' +
+        (stage.parallel ? '<span class="meta"> · in parallel</span>' : '') +
+        '<span class="sr-only"> — ' + statusWord + '</span>' +
+        (stage.attempts ? ' ' + badge('warning', '↻', 'attempt ' + stage.attempts + ' of 3') : '') +
+        (stage.detail ? '<span class="stage-detail">' + richText(stage.detail) + '</span>' : '') +
+      '</span>' +
+      '<span class="stage-dur">' + (stage.dur != null ? formatElapsed(stage.dur) : '') + '</span>' +
+    '</li>';
+}
+
+function renderPipelineCard(stages, elapsedMs, opts) {
+  opts = opts || {};
+  var sla = slaState(elapsedMs);
+  var complete = pipelineIsComplete(stages);
+  var failed = pipelineHasFailure(stages);
+
+  var statusBadge;
+  if (failed) statusBadge = badge('danger', '✕', 'Failed — routed to DLQ');
+  else if (complete && sla.breached) statusBadge = badge('danger', '!', 'Complete, SLA breached');
+  else if (complete) statusBadge = badge('success', '✓', 'Complete within budget');
+  else statusBadge = badge('neutral', '◐', 'Running');
+
+  var card = el(
+    '<section class="card" aria-label="Diagnosis pipeline">' +
+      '<div class="pipeline-head">' +
+        '<h3>Diagnosis pipeline</h3>' + statusBadge +
+        '<span class="pipeline-clock" data-clock>' + formatElapsed(elapsedMs) + '</span>' +
+      '</div>' +
+      '<ol class="stages" data-stages>' + stages.map(renderStage).join('') + '</ol>' +
+      '<div class="sla sla-' + sla.tone + '" data-sla>' +
+        '<div class="sla-label">' +
+          '<span data-sla-text></span>' +
+          '<span class="mono">' + formatElapsed(elapsedMs) + ' / 5:00</span>' +
+        '</div>' +
+        '<div class="sla-track" role="progressbar" aria-valuemin="0" aria-valuemax="100"' +
+             ' aria-valuenow="' + Math.round(sla.pct) + '" aria-label="Share of the 5-minute runbook budget used">' +
+          '<div class="sla-fill" style="width:' + sla.pct + '%"></div>' +
+        '</div>' +
+      '</div>' +
+      (opts.footer || '') +
+    '</section>'
+  );
+  updateSla(card, elapsedMs, complete, failed);
+  return card;
+}
+
+function slaText(sla, complete, failed) {
+  if (failed) return 'Pipeline failed before a runbook was produced';
+  if (complete && sla.breached) return 'Past the 5-minute budget — runbook-SLA alarm raised';
+  if (complete) return 'Delivered with ' + formatElapsed(sla.remainingMs) + ' of budget to spare';
+  if (sla.breached) return 'Over the 5-minute budget — runbook-SLA alarm raised';
+  if (sla.tone === 'warning') return formatElapsed(sla.remainingMs) + ' of budget left';
+  return 'Within the 5-minute runbook budget (NFR-01)';
+}
+
+function updateSla(card, elapsedMs, complete, failed) {
+  var sla = slaState(elapsedMs);
+  var wrap = card.querySelector('[data-sla]');
+  wrap.className = 'sla sla-' + sla.tone;
+  wrap.querySelector('[data-sla-text]').textContent = slaText(sla, complete, failed);
+  wrap.querySelector('.mono').textContent = formatElapsed(elapsedMs) + ' / 5:00';
+  var track = wrap.querySelector('[role="progressbar"]');
+  track.setAttribute('aria-valuenow', String(Math.round(sla.pct)));
+  wrap.querySelector('.sla-fill').style.width = sla.pct + '%';
+  card.querySelector('[data-clock]').textContent = formatElapsed(elapsedMs);
+}
+
+/* Runs a scripted pipeline, updating the card in place. */
+function startPipeline(incident) {
+  var stages = baseStages();
+  var events = (TIMELINES[incident.variant] || TIMELINES.nominal).slice();
+  var total = timelineTotal(incident.variant);
+  var card = addNode(renderPipelineCard(stages, 0));
+  var startedAt = Date.now();
+  var next = 0;
+
+  var controller = {
+    card: card, stages: stages, incident: incident, done: false,
+    elapsed: function () { return Math.min(total, (Date.now() - startedAt) * SPEED); },
+    stop: function () { clearInterval(controller.timer); }
+    /* registered in state.intervals below, so cancelPendingWork clears it too */
+  };
+
+  var generation = currentGeneration();
+  controller.timer = setInterval(function () {
+    if (isStale(generation)) { controller.stop(); return; }
+    var simMs = controller.elapsed();
+
+    var resolved = [];
+    while (next < events.length && events[next].at <= simMs) {
+      events[next].set.forEach(function (s) {
+        var stage = stages.find(function (x) { return x.key === s.k; });
+        if (!stage) return;
+        stage.status = s.status;
+        if (s.detail) stage.detail = stageDetail(s.detail, incident);
+        if (s.dur != null) stage.dur = s.dur;
+        if (s.attempts) stage.attempts = s.attempts;
+        if (s.status !== 'running') resolved.push(stage.label + ' ' + s.status);
+      });
+      card.querySelector('[data-stages]').innerHTML = stages.map(renderStage).join('');
+      next++;
+    }
+    /* One announcement per tick. Assigning to the live region once per stage
+       meant a tick that resolved the parallel logs/config pair only ever
+       announced the second of them. */
+    if (resolved.length) announce(resolved.join(', '));
+
+    var complete = pipelineIsComplete(stages);
+    var failed = pipelineHasFailure(stages);
+    updateSla(card, simMs, complete, failed);
+    refreshSlaHealth();
+
+    if (next >= events.length && simMs >= total) {
+      controller.stop();
+      controller.done = true;
+      incident.state = failed ? 'failed' : 'complete';
+      incident.completedMs = total;
+      renderRail();
+      /* rebuild once with the final badge */
+      var fresh = renderPipelineCard(stages, total);
+      card.replaceWith(fresh);
+      controller.card = fresh;
+      state.live = null;
+      if (failed) onPipelineFailed(incident);
+      else onPipelineComplete(incident);
+    }
+  }, 100);
+
+  state.intervals.push(controller.timer);
+  state.live = controller;
+  return controller;
+}
+
+function onPipelineComplete(incident) {
+  announce('Diagnosis complete for ' + incident.id);
+  addAssistant(diagnosisIntro(incident), {
+    done: function () {
+      addNode(renderDiagnosisCard(incident));
+      later(function () {
+        addNode(renderRunbookCard(incident));
+        later(function () { addNode(renderApprovalCard(incident)); renderSuggestions(); }, 400);
+      }, 400);
+    }
+  });
+}
+
+function onPipelineFailed(incident) {
+  announce('Diagnosis failed for ' + incident.id);
+  addAssistant(
+    '<p>I could not complete a diagnosis for <strong>' + escapeHtml(incident.id) + '</strong>. Log correlation failed three times ' +
+    'against your log platform and the execution has been routed to the dead-letter queue for redrive.</p>' +
+    '<p>What I can tell you from the alert alone: all three search coordinator nodes stopped answering at 22:40, ' +
+    'within the same second, which points at the network path or the cluster as a whole rather than at one node. ' +
+    'The raw alert and the two log lines that did arrive are in the Evidence panel.</p>' +
+    '<p>Once your log platform is reachable again, redriving the DLQ message will re-run this diagnosis from the start.</p>',
+    { done: renderSuggestions }
+  );
+}
+
+function diagnosisIntro(incident) {
+  var sla = slaState(incident.completedMs || 0);
+  var timing = sla.breached
+    ? 'It ran <strong>' + formatElapsed(incident.completedMs) + '</strong>, which is past the five-minute budget, so the runbook-SLA alarm has fired.'
+    : 'It finished in <strong>' + formatElapsed(incident.completedMs) + '</strong>, inside the five-minute budget.';
+  return '<p>Diagnosis for <strong>' + escapeHtml(incident.id) + '</strong> is complete. ' + timing + '</p>';
+}
+
+/* ---------- diagnosis card ---------- */
+
+function renderDiagnosisCard(incident) {
+  var dx = incident.diagnosis;
+  var sev = severityMeta(incident.severity);
+  var degraded = incident.variant === 'degraded';
+
+  var chips = [
+    '<button class="chip" data-evidence="logs">Log excerpt</button>',
+    degraded ? '' : '<button class="chip" data-evidence="changes">Change history</button>',
+    '<button class="chip" data-evidence="similar">' + incident.evidence.similar.length + ' similar incident' + (incident.evidence.similar.length === 1 ? '' : 's') + '</button>'
+  ].filter(Boolean).join('');
+
+  var steps = dx.steps.map(function (s, i) {
+    var tone = s.priority === 'P1' ? 'danger' : (s.priority === 'P2' ? 'warning' : 'neutral');
+    return '<li>' +
+      '<span class="step-num">' + (i + 1) + '</span>' +
+      '<span><span class="step-text">' + richText(s.text) + '</span> ' + badge(tone, '', s.priority) +
+        (s.cmd ? '<span class="cmd"><code>' + escapeHtml(s.cmd) + '</code>' +
+          '<button class="btn btn-quiet btn-sm" data-copy="' + escapeHtml(s.cmd) + '">Copy</button></span>' : '') +
+      '</span></li>';
+  }).join('');
+
+  return el(
+    '<section class="card" aria-label="Diagnosis for ' + escapeHtml(incident.id) + '">' +
+      '<div class="dx-head">' +
+        badge(sev.tone, sev.glyph, sev.label + ' · ' + sev.text) +
+        '<strong>' + escapeHtml(incident.service) + '</strong>' +
+        '<span class="mono meta">' + escapeHtml(incident.id) + '</span>' +
+      '</div>' +
+      '<h3 class="dx-cause">' + richText(dx.cause) + '</h3>' +
+      '<div class="dx-body">' + dx.body.map(function (p) { return '<p>' + richText(p) + '</p>'; }).join('') + '</div>' +
+      (degraded ? '<div class="alert alert-warning" style="margin-bottom:var(--space-4)">' +
+        '<strong>Partial evidence.</strong> Configuration and VCS correlation was skipped for this incident, so nothing below is grounded in change history.</div>' : '') +
+      '<div class="section-label">Grounded in</div>' +
+      '<div class="chips">' + chips + '</div>' +
+      '<div class="section-label">Remediation, in priority order</div>' +
+      '<ol class="steps">' + steps + '</ol>' +
+      '<div class="dx-foot">' +
+        '<span>Generated by <strong>' + escapeHtml(dx.model) + '</strong></span>' +
+        '<span>Confidence: ' + escapeHtml(dx.confidence) + '</span>' +
+        '<span>' + escapeHtml(dx.generatedAt) + '</span>' +
+      '</div>' +
+    '</section>'
+  );
+}
+
+/* ---------- runbook card ---------- */
+
+function renderRunbookCard(incident) {
+  var rb = incident.runbook;
+  var ap = approvalMeta(rb.approvalStatus);
+  var all = incident.diagnosis.steps;
+  var shown = all.slice(0, 3);
+
+  var stepHtml = function (s, i) {
+    return '<li>' +
+      '<span class="step-num">' + (i + 1) + '</span>' +
+      '<span><span class="step-text">' + richText(s.text) + '</span>' +
+        (s.cmd ? '<span class="cmd"><code>' + escapeHtml(s.cmd) + '</code>' +
+          '<button class="btn btn-quiet btn-sm" data-copy="' + escapeHtml(s.cmd) + '">Copy</button></span>' : '') +
+      '</span></li>';
+  };
+
+  var card = el(
+    '<section class="card" aria-label="Runbook ' + escapeHtml(rb.id) + '">' +
+      '<div class="dx-head">' +
+        '<h3>' + escapeHtml(rb.title) + '</h3>' +
+        badge(ap.tone, ap.glyph, ap.text) +
+        '<span class="mono meta">' + escapeHtml(rb.id) + '</span>' +
+      '</div>' +
+      '<ol class="steps" data-steps>' + shown.map(stepHtml).join('') + '</ol>' +
+      (all.length > 3
+        ? '<button class="btn btn-quiet btn-sm" data-expand style="margin-top:var(--space-2)">Show all ' + all.length + ' steps</button>'
+        : '') +
+      '<div class="row" style="margin-top:var(--space-4)">' +
+        '<button class="btn btn-secondary btn-sm" data-open-runbook>Open full runbook</button>' +
+        '<button class="btn btn-quiet btn-sm" data-export>Export JSON</button>' +
+        '<button class="btn btn-quiet btn-sm" data-download>Download</button>' +
+      '</div>' +
+    '</section>'
+  );
+
+  var expand = card.querySelector('[data-expand]');
+  if (expand) {
+    expand.addEventListener('click', function () {
+      card.querySelector('[data-steps]').innerHTML = all.map(stepHtml).join('');
+      expand.remove();
+    });
+  }
+  card.querySelector('[data-open-runbook]').addEventListener('click', function (e) {
+    openDrawer('runbook', e.currentTarget);
+  });
+  card.querySelector('[data-export]').addEventListener('click', function () {
+    addAssistant(
+      '<p>The export endpoint returns the runbook as JSON with the script and API references intact, ' +
+      'so an automation platform can consume it directly:</p>' +
+      '<div class="cmd"><code>GET /v1/runbooks/' + escapeHtml(rb.id) + '/export</code></div>' +
+      '<p class="meta">Authenticated with your Cognito token and scoped to <strong>' + escapeHtml(state.tenantId) + '</strong>. ' +
+      'Exporting does not execute anything — approval is still a separate, explicit step.</p>',
+      { wide: true }
+    );
+  });
+  card.querySelector('[data-download]').addEventListener('click', function () {
+    addAssistant('<p>In the deployed application this returns a presigned S3 URL for <code>' + escapeHtml(rb.id) +
+      '.md</code>, valid for 15 minutes. The prototype has no S3 bucket behind it, so there is nothing to download here.</p>');
+  });
+  return card;
+}
+
+/* ---------- approval card: the safety-critical surface ---------- */
+
+function renderApprovalCard(incident) {
+  var rb = incident.runbook;
+
+  if (rb.approvalStatus === 'executed' || rb.approvalStatus === 'failed') {
+    return renderAuditReceipt(incident);
+  }
+
+  var allowed = canApprove(state.role);
+  var reason = approvalBlockReason(state.role);
+
+  var rows = rb.actions.map(function (a) {
+    return '<tr><td><strong>' + escapeHtml(a.action) + '</strong></td><td>' + escapeHtml(a.target) +
+      '</td><td>' + escapeHtml(a.blast) + '</td></tr>';
+  }).join('');
+
+  var card = el(
+    '<section class="card approve-card" aria-label="Approve remediation for ' + escapeHtml(rb.id) + '" data-approval>' +
+      '<div class="dx-head"><h3>Approve remediation</h3>' +
+        badge('warning', '○', 'Awaiting a human decision') + '</div>' +
+
+      '<div class="alert alert-warning">' +
+        '<strong>This executes real changes on live infrastructure.</strong> Approving hands ' + rb.actions.length +
+        ' action' + (rb.actions.length === 1 ? '' : 's') + ' to your remediation platform. Nothing runs until you approve.' +
+      '</div>' +
+
+      '<div class="section-label">What will run</div>' +
+      '<div class="will-run-wrap"><table class="will-run">' +
+        '<thead><tr><th>Action</th><th>Target</th><th>Blast radius</th></tr></thead>' +
+        '<tbody>' + rows + '</tbody>' +
+      '</table></div>' +
+
+      (allowed
+        ? '<label class="confirm"><input type="checkbox" data-confirm>' +
+            '<span>I have reviewed all ' + rb.actions.length + ' action' + (rb.actions.length === 1 ? '' : 's') +
+            ' above and accept the blast radius.</span></label>'
+        : '') +
+
+      '<div class="row">' +
+        /* Always starts disabled: an admin enables it by ticking the
+           confirmation below, a non-admin never can. */
+        '<button class="btn btn-primary" data-approve disabled>Approve and execute</button>' +
+        '<button class="btn btn-secondary" data-decline>Decline</button>' +
+      '</div>' +
+
+      (allowed ? '' :
+        '<div class="alert alert-info gate-note"><strong>You cannot approve this runbook.</strong> ' +
+        escapeHtml(reason) + '</div>') +
+    '</section>'
+  );
+
+  var approveBtn = card.querySelector('[data-approve]');
+  var confirmBox = card.querySelector('[data-confirm]');
+
+  if (allowed) {
+    confirmBox.addEventListener('change', function () { approveBtn.disabled = !confirmBox.checked; });
+  } else if (state.force403) {
+    /* ?state=403 deliberately re-enables the button so the server-side refusal
+       (Requirement 7.2) can be demonstrated, not just the disabled control. */
+    approveBtn.disabled = false;
+    approveBtn.textContent = 'Approve and execute (forced, for demo)';
+  }
+
+  approveBtn.addEventListener('click', function () {
+    if (!canApprove(state.role)) return show403(incident, card);
+    executeRemediation(incident, card);
+  });
+
+  card.querySelector('[data-decline]').addEventListener('click', function () {
+    incident.runbook.approvalStatus = 'declined';
+    card.replaceWith(el(
+      '<section class="card" aria-label="Remediation declined">' +
+        '<div class="dx-head"><h3>Remediation declined</h3>' + badge('neutral', '—', 'Declined') + '</div>' +
+        '<p class="meta" style="margin:0">No action was sent to your remediation platform. ' +
+        'The runbook stays available, and any Tenant Admin can approve it later.</p>' +
+      '</section>'
+    ));
+    renderRail();
+    announce('Remediation declined. Nothing was executed.');
+  });
+
+  return card;
+}
+
+function show403(incident, card) {
+  card.querySelector('[data-approve]').disabled = true;
+  var note = el(
+    '<div class="alert alert-danger" style="margin-top:var(--space-3)">' +
+      '<strong>403 — admin approval required.</strong> The API refused this request because your token’s Cognito group ' +
+      'is <code>' + escapeHtml(state.role) + '</code>, not <code>TenantAdmin</code>. No call was made to the remediation ' +
+      'platform, and the attempt has been written to the audit trail.' +
+    '</div>'
+  );
+  card.appendChild(note);
+  announce('Approval refused: admin approval required.');
+}
+
+function executeRemediation(incident, card) {
+  var rb = incident.runbook;
+  card.querySelectorAll('button, input').forEach(function (n) { n.disabled = true; });
+  var chip = addToolChip('Calling your remediation platform with ' + rb.actions.length + ' actions…');
+
+  later(function () {
+    chip.resolve('Remediation platform accepted ' + rb.actions.length + ' actions');
+    rb.approvalStatus = 'executed';
+    incident.audit = incident.audit || [];
+    incident.audit.unshift({
+      actor: 'you (' + state.role + ')',
+      when: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' local',
+      action: 'approve + execute ' + rb.id,
+      result: 'success',
+      target: rb.actions[0].target,
+      ims: { ok: true, text: 'ServiceNow incident updated with findings and runbook link.' }
+    });
+    card.replaceWith(renderAuditReceipt(incident));
+    renderRail();
+    renderSuggestions();
+    announce('Remediation executed successfully and recorded in the audit trail.');
+  }, REDUCED ? 200 : 1400);
+}
+
+/* ---------- audit receipt ---------- */
+
+function renderAuditReceipt(incident) {
+  var entry = (incident.audit && incident.audit[0]) || null;
+  if (!entry) {
+    return el('<section class="card"><div class="empty"><strong>Nothing executed yet</strong>' +
+      'When a Tenant Admin approves a runbook, the action, actor, timestamp and result appear here.</div></section>');
+  }
+  var tone = entry.result === 'success' ? 'success' : 'danger';
+  var glyph = entry.result === 'success' ? '✓' : '✕';
+
+  return el(
+    '<section class="card" aria-label="Audit record">' +
+      '<div class="dx-head"><h3>Remediation executed</h3>' +
+        badge(tone, glyph, entry.result === 'success' ? 'Success' : 'Failed') + '</div>' +
+      '<dl class="kv">' +
+        '<dt>Actor</dt><dd>' + escapeHtml(entry.actor) + '</dd>' +
+        '<dt>When</dt><dd>' + escapeHtml(entry.when) + '</dd>' +
+        '<dt>Action</dt><dd class="mono">' + escapeHtml(entry.action) + '</dd>' +
+        '<dt>Target</dt><dd>' + escapeHtml(entry.target) + '</dd>' +
+        '<dt>Record</dt><dd>Append-only in the AuditTrail table, retained 6 months</dd>' +
+      '</dl>' +
+      '<div class="alert alert-' + (entry.ims.ok ? 'success' : 'warning') + '" style="margin-top:var(--space-4)">' +
+        escapeHtml(entry.ims.text) +
+      '</div>' +
+    '</section>'
+  );
+}
+
+/* ---------- incident rail ---------- */
+
+function visibleIncidents() {
+  if (SCENE === 'empty') return [];
+  var q = state.filter.trim().toLowerCase();
+  var list = MOCK.filter(function (i) { return isTenantMatch(state.tenantId, i.tenantId); });
+  if (!q) return list;
+  return list.filter(function (i) {
+    return (i.service + ' ' + i.id + ' ' + i.title).toLowerCase().indexOf(q) !== -1;
+  });
+}
+
+function railItem(incident) {
+  var sev = severityMeta(incident.severity);
+  var awaiting = incident.runbook && incident.runbook.approvalStatus === 'pending';
+  var dotClass = incident.state === 'failed' ? 'dot-failed'
+    : incident.state !== 'complete' ? 'dot-live'
+    : awaiting ? 'dot-attention' : 'dot-done';
+  var statusWord = incident.state === 'failed' ? 'Diagnosis failed'
+    : incident.state === 'complete'
+      ? (incident.runbook && incident.runbook.approvalStatus === 'pending' ? 'Runbook awaiting approval' : 'Resolved')
+      : 'Diagnosing';
+
+  return '' +
+    '<button class="incident" data-id="' + escapeHtml(incident.id) + '"' +
+      (state.selectedId === incident.id ? ' aria-current="true"' : '') + '>' +
+      '<span class="incident-top">' +
+        badge(sev.tone, sev.glyph, sev.label) +
+        '<span class="incident-service">' + escapeHtml(incident.service) + '</span>' +
+      '</span>' +
+      '<span class="incident-title">' + escapeHtml(incident.title) + '</span>' +
+      '<span class="incident-foot">' +
+        '<span class="dot ' + dotClass + '" aria-hidden="true"></span>' +
+        '<span>' + statusWord + '</span>' +
+        '<span aria-hidden="true">·</span>' +
+        '<span>' + relativeTime(incident.receivedAt, Date.now()) + '</span>' +
+      '</span>' +
+    '</button>';
+}
+
+function renderRail() {
+  var list = visibleIncidents();
+  var target = $('railList');
+
+  if (!list.length) {
+    target.innerHTML = '<div style="padding:var(--space-3)"><div class="empty"><strong>' +
+      (state.filter ? 'No incidents match ' + escapeHtml(state.filter) : 'No open incidents') + '</strong>' +
+      (state.filter ? 'Try a different service name or alert id.'
+                    : 'When an alert arrives on the ingestion webhook it appears here and diagnosis starts automatically.') +
+      '</div></div>';
+    return;
+  }
+
+  var active = list.filter(function (i) { return i.state !== 'complete' || (i.runbook && i.runbook.approvalStatus === 'pending'); });
+  var recent = list.filter(function (i) { return active.indexOf(i) === -1; });
+
+  var html = '';
+  if (active.length) html += '<div class="rail-group">Needs attention</div>' + active.map(railItem).join('');
+  if (recent.length) html += '<div class="rail-group">Recent</div>' + recent.map(railItem).join('');
+  target.innerHTML = html;
+}
+
+function currentIncident() {
+  return MOCK.find(function (i) { return i.id === state.selectedId; }) || null;
+}
+
+function selectIncident(id) {
+  var incident = MOCK.find(function (i) { return i.id === id; });
+  if (!incident) return;
+
+  /* Cancel first, and before the tenant check: the guard below used to return
+     early while a pipeline interval was still running, so a refused incident
+     still had the previous one's cards arriving in it. */
+  cancelPendingWork();
+  if (state.live) { state.live.stop(); state.live = null; }
+
+  /* Requirement 6.3 / C-01: refuse to render anything outside the session tenant. */
+  if (!isTenantMatch(state.tenantId, incident.tenantId)) {
+    $('transcriptInner').innerHTML = '';
+    addNode(el('<div class="alert alert-danger"><strong>Access denied.</strong> ' +
+      'That incident belongs to another tenant. Your session is scoped to ' + escapeHtml(state.tenantId) + '.</div>'));
+    return;
+  }
+
+  state.selectedId = id;
+  closeDrawer();
+  renderRail();
+  $('transcriptInner').innerHTML = '';
+
+  var sev = severityMeta(incident.severity);
+  addNode(el(
+    '<div class="turn-assistant">' +
+      '<p><strong>' + escapeHtml(incident.service) + '</strong> — ' + escapeHtml(incident.title) + '</p>' +
+      '<p class="meta">' + sev.label + ' ' + sev.text + ' · ' + escapeHtml(incident.source) + ' · ' +
+      escapeHtml(incident.id) + ' · received ' + relativeTime(incident.receivedAt, Date.now()) + '</p>' +
+    '</div>'
+  ));
+
+  if (SCENE === 'error') {
+    addNode(el('<div class="alert alert-danger"><strong>Could not reach the diagnostics API.</strong> ' +
+      'The request failed after three attempts (504 from the gateway). Nothing is lost — the pipeline runs ' +
+      'server-side and this view will catch up once the API answers. ' +
+      '<button class="btn btn-quiet btn-sm" data-retry>Retry</button></div>'));
+    $('transcriptInner').querySelector('[data-retry]').addEventListener('click', function () {
+      location.search = '';
+    });
+    renderSuggestions();
+    return;
+  }
+
+  if (incident.state === 'fresh') {
+    addAssistant('<p>This alert is still being diagnosed. I will narrate each stage as it lands — ' +
+      'the whole pipeline has a five-minute budget.</p>', { done: function () { startPipeline(incident); } });
+    return;
+  }
+
+  /* Already finished: show the completed pipeline, then everything it produced. */
+  var stages = finishedStages(incident.variant, incident);
+  addNode(renderPipelineCard(stages, incident.completedMs || timelineTotal(incident.variant)));
+
+  if (incident.state === 'failed') { onPipelineFailed(incident); return; }
+
+  addAssistant(diagnosisIntro(incident), {
+    instant: true,
+    done: function () {
+      addNode(renderDiagnosisCard(incident));
+      addNode(renderRunbookCard(incident));
+      addNode(renderApprovalCard(incident));
+      renderSuggestions();
+    }
+  });
+}
+
+function refreshSlaHealth() {
+  var anyBreach = MOCK.some(function (i) {
+    return i.completedMs != null && slaState(i.completedMs).breached;
+  });
+  var live = state.live && slaState(state.live.elapsed()).breached;
+  var node = $('slaHealth');
+  if (anyBreach || live) {
+    node.className = 'badge badge-danger';
+    node.innerHTML = '<span aria-hidden="true">!</span> <span class="sla-long">Runbook SLA breached</span><span class="sla-short">SLA breach</span>';
+  } else {
+    node.className = 'badge badge-success';
+    node.innerHTML = '<span aria-hidden="true">✓</span> <span class="sla-long">Pipeline SLA healthy</span><span class="sla-short">SLA ok</span>';
+  }
+}
+
+/* ---------- drawer ---------- */
+
+function drawerRunbook(incident) {
+  if (!incident || !incident.runbook) {
+    return '<div class="empty"><strong>No runbook yet</strong>A runbook appears once the diagnosis pipeline finishes.</div>';
+  }
+  var rb = incident.runbook;
+  var ap = approvalMeta(rb.approvalStatus);
+  return '<h3>' + escapeHtml(rb.title) + '</h3>' +
+    '<p class="meta">' + escapeHtml(rb.id) + ' · ' + escapeHtml(incident.id) + ' · ' + ap.text + '</p>' +
+    '<h4>Summary</h4><p>' + richText(incident.diagnosis.cause) + '</p>' +
+    '<h4>Steps</h4><ol class="steps">' + incident.diagnosis.steps.map(function (s, i) {
+      return '<li><span class="step-num">' + (i + 1) + '</span><span>' +
+        '<span class="step-text">' + richText(s.text) + '</span> ' +
+        badge(s.priority === 'P1' ? 'danger' : (s.priority === 'P2' ? 'warning' : 'neutral'), '', s.priority) +
+        (s.cmd ? '<span class="cmd"><code>' + escapeHtml(s.cmd) + '</code>' +
+          '<button class="btn btn-quiet btn-sm" data-copy="' + escapeHtml(s.cmd) + '">Copy</button></span>' : '') +
+        '</span></li>';
+    }).join('') + '</ol>' +
+    '<h4>Rollback</h4><p class="meta">Every step above is reversible by restoring the previous value. ' +
+    'The runbook stored in S3 carries the same rollback note.</p>';
+}
+
+function drawerEvidence(incident, focus) {
+  if (!incident) return '';
+  var ev = incident.evidence;
+  var out = '<p class="meta" style="margin-top:0">Everything the diagnosis was grounded in. ' +
+    'Personal data is redacted before it reaches this panel.</p>';
+
+  out += '<h4>Log excerpt</h4>';
+  out += ev.logs.length
+    ? '<pre class="logblock">' + ev.logs.map(function (l) {
+        return '<span class="logline' + (l.hit ? ' logline-hit' : '') + '">' + redact(escapeHtml(l.text)) + '</span>';
+      }).join('') + '</pre>'
+    : '<p class="meta">No log lines were retrieved.</p>';
+
+  out += '<h4>Change history</h4>';
+  if (!ev.changes.length) {
+    out += incident.variant === 'degraded'
+      ? '<div class="alert alert-warning">Configuration and VCS correlation was skipped — the tenant’s VCS ' +
+        'credentials were rejected. No change history could be retrieved for this incident (C-02).</div>'
+      : '<p class="meta">No configuration or code changes in the window before the alert.</p>';
+  } else {
+    out += ev.changes.map(function (c) {
+      return '<div class="similar"><div class="similar-head"><strong class="mono">' + escapeHtml(c.sha) + '</strong>' +
+        '<span class="meta">' + escapeHtml(c.author) + '</span></div>' +
+        /* Redacted, like the log lines. The panel tells the operator that
+           personal data has been removed before it reaches them, and a config
+           diff is the likeliest place in the whole record for a token or a
+           connection string to appear. */
+        '<p style="margin:var(--space-2) 0">' + redact(escapeHtml(c.message)) + '</p>' +
+        '<p class="meta">' + escapeHtml(c.when) + '</p>' +
+        '<pre class="diffblock">' + c.diff.map(function (d) {
+          var cls = d.k === '+' ? 'diff-add' : (d.k === '-' ? 'diff-del' : 'diff-ctx');
+          return '<span class="' + cls + '">' + redact(escapeHtml(d.text)) + '</span>';
+        }).join('') + '</pre></div>';
+    }).join('');
+  }
+
+  out += '<h4>Similar past incidents</h4>';
+  out += ev.similar.length
+    ? ev.similar.map(function (s) {
+        return '<div class="similar"><div class="similar-head"><strong class="mono">' + escapeHtml(s.id) + '</strong>' +
+          '<span class="score">' + s.score.toFixed(2) + ' similarity</span></div>' +
+          '<p style="margin:var(--space-1) 0">' + escapeHtml(s.title) + '</p>' +
+          '<p class="meta">' + escapeHtml(s.when) + ' · ' + escapeHtml(s.outcome) + '</p></div>';
+      }).join('')
+    : '<p class="meta">No similar incidents in this tenant’s vector namespace yet.</p>';
+
+  return out;
+}
+
+function drawerAudit(incident) {
+  if (!incident || !incident.audit || !incident.audit.length) {
+    return '<div class="empty"><strong>No executed actions</strong>' +
+      'Only executed remediation actions are audited. Viewing a diagnosis is not recorded.</div>';
+  }
+  return '<p class="meta" style="margin-top:0">Append-only, retained for six months.</p>' +
+    incident.audit.map(function (e) {
+      var tone = e.result === 'success' ? 'success' : 'danger';
+      return '<div class="similar"><div class="similar-head">' +
+        badge(tone, e.result === 'success' ? '✓' : '✕', e.result) +
+        '<span class="score">' + escapeHtml(e.when) + '</span></div>' +
+        '<dl class="kv" style="margin-top:var(--space-2)">' +
+          '<dt>Actor</dt><dd>' + escapeHtml(e.actor) + '</dd>' +
+          '<dt>Action</dt><dd class="mono">' + escapeHtml(e.action) + '</dd>' +
+          '<dt>Target</dt><dd>' + escapeHtml(e.target) + '</dd>' +
+        '</dl></div>';
+    }).join('');
+}
+
+function openDrawer(tab, returnFocus) {
+  state.drawerTab = tab || state.drawerTab;
+  state.drawerReturnFocus = returnFocus || document.activeElement;
+  $('app').classList.add('has-drawer');
+  $('drawer').hidden = false;
+  renderDrawer();
+  $('drawerClose').focus();
+}
+
+function closeDrawer() {
+  if ($('drawer').hidden) return;
+  $('app').classList.remove('has-drawer');
+  $('drawer').hidden = true;
+  var back = state.drawerReturnFocus;
+  state.drawerReturnFocus = null;
+  if (back && document.contains(back)) back.focus();
+}
+
+function renderDrawer() {
+  var incident = currentIncident();
+  var titles = { runbook: 'Runbook', evidence: 'Evidence', audit: 'Audit trail' };
+  $('drawerTitle').textContent = titles[state.drawerTab];
+  document.querySelectorAll('.tab').forEach(function (t) {
+    t.setAttribute('aria-selected', String(t.dataset.tab === state.drawerTab));
+  });
+  var body = $('drawerBody');
+  body.innerHTML = state.drawerTab === 'runbook' ? drawerRunbook(incident)
+    : state.drawerTab === 'evidence' ? drawerEvidence(incident)
+    : drawerAudit(incident);
+  body.scrollTop = 0;
+}
+
+/* ---------- suggestions ---------- */
+
+function suggestionsFor() {
+  var incident = currentIncident();
+  if (!incident) return ['What is broken right now?', 'What can you do?'];
+  if (incident.state === 'fresh') return ['How long until it is done?', 'What have you found so far?'];
+  if (incident.state === 'failed') return ['Show me the logs', 'What is broken right now?'];
+  var out = ['Why did this happen?', 'Show me the runbook'];
+  if (incident.evidence.changes.length) out.push('What changed before this?');
+  if (incident.runbook && incident.runbook.approvalStatus === 'executed') out.push('Who approved it?');
+  out.push('Export it as JSON');
+  return out;
+}
+
+function renderSuggestions() {
+  $('suggestions').innerHTML = suggestionsFor().map(function (s) {
+    return '<button class="chip" data-suggest="' + escapeHtml(s) + '">' + escapeHtml(s) + '</button>';
+  }).join('');
+}
+
+/* ---------- conversation intents ----------
+   Stands in for Bedrock tool-use inside fn-chat. Note that focus_approval
+   never executes anything: it only moves focus to the approval card. */
+
+function respond(text) {
+  var routed = routeIntent(text);
+  var incident = currentIncident();
+
+  if (routed.intent === 'noop') return;
+
+  /* An id typed in the composer switches incident, as if it were clicked. */
+  var wanted = routed.params.alertId;
+  if (wanted && wanted !== state.selectedId && MOCK.some(function (i) { return i.id === wanted; })) {
+    selectIncident(wanted);
+    return;
+  }
+
+  if (!incident) {
+    if (routed.intent === 'list_incidents' || routed.intent === 'help') return respondGeneric(routed.intent);
+    addAssistant('<p>Pick an incident from the list on the left, or name one — ' +
+      'for example <strong>ALT-1041</strong> — and I will pull its diagnosis.</p>');
+    return;
+  }
+
+  var pipelineDone = incident.state === 'complete';
+
+  switch (routed.intent) {
+    case 'focus_approval': {
+      var card = document.querySelector('[data-approval]');
+      if (!card) {
+        addAssistant('<p>There is no runbook awaiting approval on this incident right now.</p>');
+        return;
+      }
+      addAssistant(
+        '<p>I will not approve anything on your behalf — that decision stays a deliberate click, ' +
+        'and it is restricted to Tenant Admins. I have moved you to the approval card; ' +
+        'review the blast radius, tick the confirmation, then approve.</p>',
+        { done: function () {
+            card.scrollIntoView({ behavior: REDUCED ? 'auto' : 'smooth', block: 'center' });
+            var focusTarget = card.querySelector('[data-confirm]') || card.querySelector('[data-approve]');
+            if (focusTarget) focusTarget.focus();
+          } }
+      );
+      return;
+    }
+
+    case 'show_runbook': {
+      if (!pipelineDone || !incident.runbook) {
+        addAssistant('<p>The runbook is not ready yet — it is the last stage of the pipeline. ' +
+          'I will post it here the moment it is rendered.</p>');
+        return;
+      }
+      var chip = addToolChip('Retrieving runbook ' + incident.runbook.id + '…');
+      later(function () {
+        chip.remove();
+        addNode(renderRunbookCard(incident));
+      }, REDUCED ? 0 : 500);
+      return;
+    }
+
+    case 'show_diagnosis': {
+      if (!pipelineDone || !incident.diagnosis) {
+        addAssistant('<p>I have not finished diagnosing this one. ' + pipelineStatusSentence(incident) + '</p>');
+        return;
+      }
+      addAssistant('<p>' + richText(incident.diagnosis.cause) + '</p>', {
+        done: function () { addNode(renderDiagnosisCard(incident)); }
+      });
+      return;
+    }
+
+    case 'show_changes': {
+      if (!incident.evidence.changes.length) {
+        addAssistant(incident.variant === 'degraded'
+          ? '<p>I could not retrieve any change history for this incident. Your VCS credentials were rejected ' +
+            'with a 401, so configuration correlation was skipped — which is why the diagnosis above is marked ' +
+            'as probable rather than confirmed.</p>'
+          : '<p>Nothing changed in the window before this alert. No commits and no deployments, which is why ' +
+            'the diagnosis points at data growth rather than at a regression.</p>');
+        return;
+      }
+      var c = incident.evidence.changes[0];
+      addAssistant('<p>One change stands out: commit <strong>' + escapeHtml(c.sha) + '</strong> by ' +
+        escapeHtml(c.author) + ', ' + escapeHtml(c.when) + ' — <em>' + escapeHtml(c.message) + '</em>. ' +
+        'The diff is in the Evidence panel.</p>', {
+        done: function () { openDrawer('evidence', $('composer')); }
+      });
+      return;
+    }
+
+    case 'show_logs':
+      addAssistant('<p>The matching log lines are in the Evidence panel. The highlighted rows are the ones ' +
+        'the diagnosis was drawn from; usernames, IPs and credentials are redacted.</p>', {
+        done: function () { openDrawer('evidence', $('composer')); }
+      });
+      return;
+
+    case 'show_audit': {
+      if (!incident.audit || !incident.audit.length) {
+        addAssistant('<p>Nothing has been executed on this incident, so there is no audit record. ' +
+          'Only executed remediation actions are audited — reading a diagnosis is not.</p>');
+        return;
+      }
+      var e = incident.audit[0];
+      addAssistant('<p><strong>' + escapeHtml(e.actor) + '</strong> approved and executed ' +
+        '<span class="mono">' + escapeHtml(e.action) + '</span> at ' + escapeHtml(e.when) +
+        ', and it succeeded.</p>', { done: function () { openDrawer('audit', $('composer')); } });
+      return;
+    }
+
+    case 'pipeline_status':
+      addAssistant('<p>' + pipelineStatusSentence(incident) + '</p>');
+      return;
+
+    case 'export_runbook':
+      if (!incident.runbook) {
+        addAssistant('<p>There is no runbook to export on this incident yet.</p>');
+        return;
+      }
+      addAssistant('<p>Use <code>GET /v1/runbooks/' + escapeHtml(incident.runbook.id) + '/export</code>. ' +
+        'It returns the steps with their script and API references intact, for an automation platform to consume. ' +
+        'Exporting never executes anything.</p>', { wide: true });
+      return;
+
+    case 'list_incidents':
+    case 'help':
+      return respondGeneric(routed.intent);
+
+    default:
+      addAssistant('<p>I did not follow that. I can explain <strong>why</strong> an incident happened, ' +
+        'show its <strong>runbook</strong>, show what <strong>changed</strong> beforehand, show the ' +
+        '<strong>logs</strong> behind the diagnosis, report pipeline <strong>status</strong>, or pull the ' +
+        '<strong>audit</strong> record. Approving remediation is always a click, never something I do for you.</p>');
+  }
+}
+
+function pipelineStatusSentence(incident) {
+  if (incident.state === 'complete') {
+    var sla = slaState(incident.completedMs);
+    return 'This diagnosis finished in <strong>' + formatElapsed(incident.completedMs) + '</strong>, ' +
+      (sla.breached ? 'which is past the five-minute budget.' : 'inside the five-minute budget.');
+  }
+  if (incident.state === 'failed') {
+    return 'This pipeline failed at log correlation after three attempts and is sitting in the dead-letter queue.';
+  }
+  if (state.live) {
+    var running = state.live.stages.filter(function (s) { return s.status === 'running'; })
+      .map(function (s) { return s.label.toLowerCase(); });
+    var el2 = formatElapsed(state.live.elapsed());
+    return 'It has been running <strong>' + el2 + '</strong> of its five-minute budget, currently on ' +
+      (running.length ? running.join(' and ') : 'the next stage') + '.';
+  }
+  return 'This alert has been received and diagnosis has not started yet.';
+}
+
+function respondGeneric(intent) {
+  if (intent === 'help') {
+    addAssistant(
+      '<p>Ask me about any incident in the list. Useful things to try:</p>' +
+      '<p><strong>“why did checkout fail?”</strong> — root cause, with the evidence behind it.<br>' +
+      '<strong>“show me the runbook”</strong> — the prioritised steps and their commands.<br>' +
+      '<strong>“what changed before this?”</strong> — commits and deployments in the window.<br>' +
+      '<strong>“how long until it is done?”</strong> — where the pipeline is against its budget.<br>' +
+      '<strong>“who approved it?”</strong> — the audit record for an executed remediation.</p>' +
+      '<p>One thing I deliberately cannot do: approve remediation. I can take you to the approval card, ' +
+      'but a Tenant Admin has to make that decision by hand.</p>');
+    return;
+  }
+  var list = visibleIncidents();
+  if (!list.length) {
+    addAssistant('<p>Nothing open right now. When an alert reaches the ingestion webhook it appears on the left ' +
+      'and diagnosis starts on its own.</p>');
+    return;
+  }
+  var lines = list.map(function (i) {
+    var sev = severityMeta(i.severity);
+    var stat = i.state === 'failed' ? 'diagnosis failed'
+      : i.state === 'complete'
+        ? (i.runbook && i.runbook.approvalStatus === 'pending' ? 'runbook awaiting approval' : 'resolved')
+        : 'still diagnosing';
+    return '<strong>' + sev.label + ' ' + escapeHtml(i.service) + '</strong> — ' + escapeHtml(i.title) +
+      ' <span class="meta">(' + escapeHtml(i.id) + ', ' + stat + ')</span>';
+  }).join('<br>');
+  addAssistant('<p>' + list.length + ' incident' + (list.length === 1 ? '' : 's') + ' in scope for ' +
+    escapeHtml(state.tenantId) + ':</p><p>' + lines + '</p>', { wide: true });
+}
+
+/* ---------- events ---------- */
+
+function submitComposer() {
+  var box = $('composer');
+  var text = box.value.trim();
+  if (!text) return;
+  addUser(text);
+  box.value = '';
+  box.style.height = 'auto';
+  later(function () { respond(text); }, REDUCED ? 0 : 260);
+}
+
+function wireEvents() {
+  $('composerForm').addEventListener('submit', function (e) { e.preventDefault(); submitComposer(); });
+
+  var box = $('composer');
+  box.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitComposer(); }
+  });
+  box.addEventListener('input', function () {
+    box.style.height = 'auto';
+    box.style.height = Math.min(160, box.scrollHeight) + 'px';
+  });
+
+  $('suggestions').addEventListener('click', function (e) {
+    var chip = e.target.closest('[data-suggest]');
+    if (!chip) return;
+    $('composer').value = chip.dataset.suggest;
+    submitComposer();
+  });
+
+  /* One copy implementation, wired to both surfaces. The two used to be
+     separate and had drifted: only one of them announced the copy. */
+  function wireCopy(root) {
+    root.addEventListener('click', function (e) {
+      var copy = e.target.closest('[data-copy]');
+      if (!copy) return;
+      copyCommand(copy);
+    });
+  }
+  wireCopy($('transcriptInner'));
+  wireCopy($('drawerBody'));
+
+  $('transcriptInner').addEventListener('click', function (e) {
+    var chip = e.target.closest('[data-evidence]');
+    if (chip) openDrawer('evidence', chip);
+  });
+
+  /* Delegated once, rather than re-attached to every button on every render. */
+  $('railList').addEventListener('click', function (e) {
+    var btn = e.target.closest('[data-id]');
+    if (btn) selectIncident(btn.dataset.id);
+  });
+
+  $('railSearch').addEventListener('input', function (e) { state.filter = e.target.value; renderRail(); });
+
+  $('roleSelect').addEventListener('change', function (e) {
+    state.role = e.target.value;
+    /* Re-render the approval card so the gate reflects the new role immediately. */
+    var card = document.querySelector('[data-approval]');
+    var incident = currentIncident();
+    if (card && incident) card.replaceWith(renderApprovalCard(incident));
+    announce('Role switched to ' + state.role + '.');
+  });
+
+  document.querySelectorAll('.tab').forEach(function (tab) {
+    tab.addEventListener('click', function () { state.drawerTab = tab.dataset.tab; renderDrawer(); });
+  });
+  $('drawerClose').addEventListener('click', closeDrawer);
+  $('scrim').addEventListener('click', function () {
+    closeDrawer();
+    $('app').classList.remove('rail-open');
+    $('railToggle').setAttribute('aria-expanded', 'false');
+  });
+
+  $('railToggle').addEventListener('click', function () {
+    var open = $('app').classList.toggle('rail-open');
+    $('railToggle').setAttribute('aria-expanded', String(open));
+    if (open) $('railSearch').focus();
+  });
+
+  /* Keyboard shortcuts, for people working fast at 3am. */
+  document.addEventListener('keydown', function (e) {
+    var inField = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+
+    if (e.key === 'Escape') {
+      if (!$('drawer').hidden) { closeDrawer(); return; }
+      if (inField) { document.activeElement.blur(); return; }
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault(); $('railSearch').focus(); return;
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && document.activeElement === $('composer')) {
+      e.preventDefault(); submitComposer(); return;
+    }
+    if (inField) return;
+
+    if (e.key === '/') { e.preventDefault(); $('composer').focus(); return; }
+    if (e.altKey || e.metaKey || e.ctrlKey || e.shiftKey) return;
+    if (e.key === 'j' || e.key === 'k') {
+      var list = visibleIncidents();
+      if (!list.length) return;
+      e.preventDefault();
+      var at = list.findIndex(function (i) { return i.id === state.selectedId; });
+      var to = e.key === 'j' ? Math.min(list.length - 1, at + 1) : Math.max(0, at - 1);
+      if (at === -1) to = 0;
+      selectIncident(list[to].id);
+      var btn = $('railList').querySelector('[data-id="' + list[to].id + '"]');
+      if (btn) btn.focus();
+    }
+  });
+}
+
+/* ---------- boot ---------- */
+
+function welcome() {
+  addNode(el(
+    '<div class="turn-assistant">' +
+      '<p style="font-family:var(--font-display);font-size:var(--text-lg);font-weight:600;line-height:1.15;letter-spacing:-0.015em;margin:0 0 var(--space-3)">' +
+        'Which outage are we looking at?' +
+      '</p>' +
+      '<p>Every alert that reaches the ingestion webhook is diagnosed automatically — logs and configuration ' +
+      'changes correlated, similar past incidents retrieved, a root cause and a runbook drafted inside five minutes. ' +
+      'Pick an incident on the left and I will walk you through what happened.</p>' +
+      '<p class="meta">Remediation is only ever executed after a Tenant Admin approves it by hand.</p>' +
+    '</div>'
+  ));
+}
+
+function applyScene() {
+  if (SCENE === '403') {
+    state.role = 'TenantEngineer';
+    state.force403 = true;
+    $('roleSelect').value = 'TenantEngineer';
+  }
+  if (SCENE === 'sla-breach') {
+    var i = MOCK.find(function (x) { return x.id === 'ALT-1041'; });
+    i.variant = 'breach';
+  }
+  var jump = {
+    'vcs-degraded': 'ALT-1036',
+    'ims-failed': 'ALT-1030',
+    '403': 'ALT-1039',
+    'sla-breach': 'ALT-1041',
+    'error': 'ALT-1039'
+  }[SCENE];
+  return jump || null;
+}
+
+function init() {
+  $('tenantName').textContent = state.tenantId;
+  /* Keep the elapsed clock consistent with the sum of the stage durations. */
+  MOCK.forEach(function (i) {
+    if (i.state === 'complete') i.completedMs = timelineTotal(i.variant);
+  });
+  wireEvents();
+  var jump = applyScene();
+  renderRail();
+  refreshSlaHealth();
+  renderSuggestions();
+  if (jump) selectIncident(jump);
+  else welcome();
+}
+
+init();
+</script>
+</body>
+</html>
