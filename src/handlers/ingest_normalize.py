@@ -15,20 +15,15 @@ import logging
 import boto3
 from botocore.exceptions import ClientError
 
-from common import alerts, config, tenant_scope
+from common import alerts, config, paramstore, tenant_scope
 from common.response import api_response
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 _events = boto3.client("events", region_name=config.REGION)
-_secrets = boto3.client("secretsmanager", region_name=config.REGION)
 
 REQUIRED_FIELDS = ("tenant_id", "severity", "service", "description")
-
-
-def _ingest_secret_name(tenant_id):
-    return f"{config.PREFIX}-tenant-{tenant_id}-ingest-hmac"
 
 
 def _raw_body(event):
@@ -51,13 +46,13 @@ def _valid_signature(tenant_id, raw_body, signature):
     if not signature:
         return False
     try:
-        secret = _secrets.get_secret_value(SecretId=_ingest_secret_name(tenant_id))
+        shared_secret = paramstore.read(tenant_id, paramstore.INGEST_HMAC)
     except ClientError:
         # Also the path for an unknown tenant_id: the response is the same 401
         # either way, so the endpoint does not confirm which tenants exist.
         return False
     expected = hmac.new(
-        secret["SecretString"].encode("utf-8"), raw_body.encode("utf-8"), hashlib.sha256
+        shared_secret.encode("utf-8"), raw_body.encode("utf-8"), hashlib.sha256
     ).hexdigest()
     return hmac.compare_digest(expected, signature)
 

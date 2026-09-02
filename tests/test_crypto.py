@@ -6,7 +6,7 @@ from unittest.mock import patch
 import pytest
 from cryptography.fernet import Fernet, InvalidToken
 
-from common import crypto
+from common import crypto, paramstore
 
 
 @pytest.fixture(autouse=True)
@@ -17,14 +17,14 @@ def clear_cache():
 
 
 def _with_keys(keys):
-    """Patch Secrets Manager so each tenant has its own DEK."""
-    def get_secret_value(SecretId):
-        for tenant, key in keys.items():
-            if SecretId == f"{crypto.config.PREFIX}-tenant-{tenant}-dek":
-                return {"SecretString": key}
-        raise AssertionError(f"unexpected secret {SecretId}")
+    """Patch Parameter Store so each tenant has its own DEK."""
+    def read(tenant_id, kind):
+        assert kind == paramstore.DEK, kind
+        if tenant_id in keys:
+            return keys[tenant_id]
+        raise AssertionError(f"unexpected tenant {tenant_id}")
 
-    return patch.object(crypto._secrets, "get_secret_value", side_effect=get_secret_value)
+    return patch.object(crypto.paramstore, "read", side_effect=read)
 
 
 def test_a_field_round_trips_through_the_tenants_own_key():

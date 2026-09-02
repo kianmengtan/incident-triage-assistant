@@ -27,16 +27,13 @@ Two decisions worth stating:
 import json
 import logging
 
-import boto3
 from botocore.exceptions import ClientError
 
-from common import audit, config, http, integrations, rbac
+from common import audit, http, integrations, paramstore, rbac
 from common.response import api_response
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
-
-_secrets = boto3.client("secretsmanager", region_name=config.REGION)
 
 # Only a TenantAdmin may change where this system sends a tenant's credentials or
 # which endpoint it will execute a runbook against.
@@ -59,14 +56,10 @@ def _authorizer_ctx(event):
     return event.get("requestContext", {}).get("authorizer") or {}
 
 
-def _secret_name(tenant_id):
-    return f"{config.PREFIX}-tenant-{tenant_id}-integration-creds"
-
-
 def _read(tenant_id):
     """The tenant's whole integration document, or empty defaults."""
     try:
-        secret = _secrets.get_secret_value(SecretId=_secret_name(tenant_id))
+        raw = paramstore.read(tenant_id, paramstore.INTEGRATION_CREDS)
     except ClientError as exc:
         logger.warning(
             "cannot read integration creds for tenant %s: %s",
@@ -75,7 +68,7 @@ def _read(tenant_id):
         )
         return {}
     try:
-        stored = json.loads(secret["SecretString"])
+        stored = json.loads(raw)
     except (json.JSONDecodeError, TypeError):
         logger.warning("integration creds for tenant %s are not valid JSON", tenant_id)
         return {}
@@ -112,9 +105,7 @@ def _endpoint_problem(endpoint):
 
 
 def _write(tenant_id, document):
-    _secrets.put_secret_value(
-        SecretId=_secret_name(tenant_id), SecretString=json.dumps(document)
-    )
+    paramstore.write(tenant_id, paramstore.INTEGRATION_CREDS, json.dumps(document))
 
 
 def _put(tenant_id, integration, body):

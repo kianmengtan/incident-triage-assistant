@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from botocore.exceptions import ClientError
 
-from common import integrations
+from common import integrations, paramstore
 
 SECRET = json.dumps(
     {
@@ -18,7 +18,7 @@ SECRET = json.dumps(
 
 
 def _secret(value=SECRET):
-    return patch.object(integrations._secrets, "get_secret_value", return_value={"SecretString": value})
+    return patch.object(integrations.paramstore, "read", return_value=value)
 
 
 def test_each_integration_is_read_from_the_one_tenant_secret():
@@ -26,7 +26,7 @@ def test_each_integration_is_read_from_the_one_tenant_secret():
         assert integrations.creds("acme", integrations.LOG_PLATFORM)["api_key"] == "k1"
         assert integrations.creds("acme", integrations.VCS)["endpoint"] == "https://git.example.com"
 
-    assert mock.call_args.kwargs["SecretId"] == "app-b9dac5ac-bc8fbf47-tenant-acme-integration-creds"
+    assert mock.call_args.args == ("acme", paramstore.INTEGRATION_CREDS)
 
 
 def test_an_unconfigured_integration_is_an_empty_dict():
@@ -37,8 +37,8 @@ def test_an_unconfigured_integration_is_an_empty_dict():
 
 def test_a_missing_secret_degrades_to_empty_rather_than_raising():
     with patch.object(
-        integrations._secrets, "get_secret_value",
-        side_effect=ClientError({"Error": {"Code": "ResourceNotFoundException", "Message": "x"}}, "GetSecretValue"),
+        integrations.paramstore, "read",
+        side_effect=ClientError({"Error": {"Code": "ParameterNotFound", "Message": "x"}}, "GetParameter"),
     ):
         assert integrations.creds("acme", integrations.LOG_PLATFORM) == {}
 

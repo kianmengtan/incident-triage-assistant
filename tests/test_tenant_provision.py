@@ -17,10 +17,6 @@ def _event(email="ada@acme-retail.com", username="ada"):
     }
 
 
-def _exists_error(code="ResourceExistsException"):
-    return ClientError({"Error": {"Code": code, "Message": "x"}}, "CreateSecret")
-
-
 def _conditional_failure():
     return ClientError(
         {"Error": {"Code": "ConditionalCheckFailedException", "Message": "x"}}, "PutItem"
@@ -31,10 +27,10 @@ def _conditional_failure():
 def harness():
     table = MagicMock()
     with patch.object(tenant_provision, "_dynamodb") as dynamodb, \
-         patch.object(tenant_provision, "_secrets") as secrets, \
+         patch.object(tenant_provision.paramstore, "create_if_missing") as provision, \
          patch.object(tenant_provision, "_cognito") as cognito:
         dynamodb.Table.return_value = table
-        yield {"table": table, "secrets": secrets, "cognito": cognito}
+        yield {"table": table, "provision": provision, "cognito": cognito}
 
 
 # ------------------------------------------------------------------- derivation
@@ -105,24 +101,27 @@ def test_the_tenant_id_is_written_back_onto_the_user(harness):
 # ----------------------------------------------------------- ordering and wedge
 
 
-def test_secrets_are_created_before_the_profile_row(harness):
+def test_key_material_is_created_before_the_profile_row(harness):
     """Order is the fix for a permanent wedge: the row marks the tenant as
     provisioned, so writing it first and then failing to create the DEK left the
     tenant unable to ingest or diagnose anything, with every later signup
     short-circuiting on "already provisioned"."""
     order = []
-    harness["secrets"].create_secret.side_effect = lambda **kw: order.append("secret")
+    harness["provision"].side_effect = lambda *args: order.append("key")
     harness["table"].put_item.side_effect = lambda **kw: order.append("row")
 
     tenant_provision.handler(_event(), None)
 
-    assert order.index("row") > order.index("secret"), order
-    assert order.count("secret") == 3
+    assert order.index("row") > order.index("key"), order
+    assert order.count("key") == 3
 
 
-def test_a_secret_failure_leaves_the_tenant_unclaimed_so_the_next_signup_retries(harness):
-    harness["secrets"].create_secret.side_effect = ClientError(
-        {"Error": {"Code": "ThrottlingException", "Message": "slow down"}}, "CreateSecret"
+def test_a_key_failure_leaves_the_tenant_unclaimed_so_the_next_signup_retries(harness):
+    """The exact shape of the outage this rewrite fixed: an AccessDeniedException
+    from the key store must not leave a claimed-but-keyless tenant behind."""
+    harness["provision"].side_effect = ClientError(
+        {"Error": {"Code": "AccessDeniedException", "Message": "no boundary allows it"}},
+        "PutParameter",
     )
 
     tenant_provision.handler(_event(), None)
@@ -130,14 +129,14 @@ def test_a_secret_failure_leaves_the_tenant_unclaimed_so_the_next_signup_retries
     harness["table"].put_item.assert_not_called()
 
 
-def test_existing_secrets_are_tolerated(harness):
-    """A re-run over already-provisioned secrets still claims the tenant.
+def test_existing_key_material_is_tolerated(harness):
+    """A re-run over already-provisioned key material still claims the tenant.
 
     Asserts the PROFILE row specifically rather than a total put count: the
     handler also writes a USER# roster row for fn-team, so counting calls would
     break on an unrelated change.
     """
-    harness["secrets"].create_secret.side_effect = _exists_error()
+    harness["provision"].return_value = False
 
     tenant_provision.handler(_event(), None)
 
@@ -145,14 +144,24 @@ def test_existing_secrets_are_tolerated(harness):
     assert "PROFILE" in written
 
 
-def test_all_three_tenant_secrets_are_provisioned(harness):
+def test_all_three_kinds_of_tenant_key_material_are_provisioned(harness):
     tenant_provision.handler(_event(), None)
 
-    names = [c.kwargs["Name"] for c in harness["secrets"].create_secret.call_args_list]
-    assert any(n.endswith("-dek") for n in names)
-    assert any(n.endswith("-ingest-hmac") for n in names)
-    assert any(n.endswith("-integration-creds") for n in names)
-    assert all(n.startswith("app-b9dac5ac-bc8fbf47-tenant-acme-retail-com") for n in names)
+    calls = [c.args for c in harness["provision"].call_args_list]
+    kinds = [kind for _tenant, kind, _value in calls]
+    assert sorted(kinds) == sorted(tenant_provision.paramstore.KINDS)
+    assert {tenant for tenant, _kind, _value in calls} == {"acme-retail-com"}
+
+
+def test_the_profile_row_records_where_the_dek_lives(harness):
+    tenant_provision.handler(_event(), None)
+
+    profile = [
+        c.kwargs["Item"]
+        for c in harness["table"].put_item.call_args_list
+        if c.kwargs["Item"]["sk"] == "PROFILE"
+    ][0]
+    assert profile["dek_param_name"] == "/app-b9dac5ac-bc8fbf47/tenant/acme-retail-com/dek"
 
 
 # ------------------------------------------------------------------- never raise

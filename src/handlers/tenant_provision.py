@@ -14,11 +14,18 @@ Two things here are load-bearing for multi-tenancy:
    group membership, so without this no one could ever approve remediation
    (Requirement 7) — the approval path was unreachable end to end.
 
-Provisioning order matters too: the tenant's secrets are created BEFORE the
+Provisioning order matters too: the tenant's key material is created BEFORE the
 profile row, because the row is what marks the tenant as provisioned. Writing
 it first and then failing to create the DEK left the tenant permanently unable
 to ingest or diagnose anything, with every later signup short-circuiting on
 "already provisioned".
+
+That key material lives in SSM Parameter Store, not Secrets Manager. The
+permissions boundary this role must carry grants Secrets Manager read only, so
+``CreateSecret`` was denied on every signup -- and because the ``except
+ClientError`` below never re-raises, the user was confirmed with no
+``custom:tenant_id`` and the console showed them a dead end after a successful
+sign-in. See :mod:`common.paramstore`.
 """
 import json
 import logging
@@ -28,12 +35,11 @@ import time
 import boto3
 from botocore.exceptions import ClientError
 
-from common import config, crypto, rbac, tenancy
+from common import config, crypto, paramstore, rbac, tenancy
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-_secrets = boto3.client("secretsmanager", region_name=config.REGION)
 _dynamodb = boto3.resource("dynamodb", region_name=config.REGION)
 _cognito = boto3.client("cognito-idp", region_name=config.REGION)
 
@@ -46,23 +52,17 @@ PUBLIC_EMAIL_DOMAINS = tenancy.PUBLIC_EMAIL_DOMAINS
 tenant_id_for_email = tenancy.tenant_id_for_email
 
 
-def _create_secret_if_missing(name, value):
-    try:
-        _secrets.create_secret(Name=name, SecretString=value)
-    except ClientError as exc:
-        if exc.response["Error"]["Code"] != "ResourceExistsException":
-            raise
+def _provision_keys(tenant_id):
+    """Create the tenant's key material, leaving anything already there alone.
 
-
-def _provision_secrets(tenant_id):
-    _create_secret_if_missing(
-        f"{config.PREFIX}-tenant-{tenant_id}-dek", crypto.generate_dek()
-    )
-    _create_secret_if_missing(
-        f"{config.PREFIX}-tenant-{tenant_id}-ingest-hmac", crypto.generate_dek()
-    )
-    _create_secret_if_missing(
-        f"{config.PREFIX}-tenant-{tenant_id}-integration-creds",
+    Idempotent per kind: a second signup for the same domain must not replace a
+    DEK that already has ciphertext encrypted under it.
+    """
+    paramstore.create_if_missing(tenant_id, paramstore.DEK, crypto.generate_dek())
+    paramstore.create_if_missing(tenant_id, paramstore.INGEST_HMAC, crypto.generate_dek())
+    paramstore.create_if_missing(
+        tenant_id,
+        paramstore.INTEGRATION_CREDS,
         json.dumps({"log_platform": {}, "vcs": {}, "remediation_platform": {}, "ims": {}}),
     )
 
@@ -77,7 +77,7 @@ def _claim_tenant(tenant_id):
                 "sk": "PROFILE",
                 "name": tenant_id,
                 "status": "active",
-                "dek_secret_arn": f"{config.PREFIX}-tenant-{tenant_id}-dek",
+                "dek_param_name": paramstore.parameter_name(tenant_id, paramstore.DEK),
                 "created_at": int(time.time()),
             },
             ConditionExpression="attribute_not_exists(tenant_id)",
@@ -137,8 +137,8 @@ def handler(event, context):
         return event
 
     try:
-        # Secrets first — see the module docstring.
-        _provision_secrets(tenant_id)
+        # Key material first — see the module docstring.
+        _provision_keys(tenant_id)
         is_founder = _claim_tenant(tenant_id)
 
         _cognito.admin_update_user_attributes(

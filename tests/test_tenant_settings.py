@@ -8,7 +8,7 @@ approval recorded execution_status "skipped" -- the product's headline feature
 was unreachable.
 """
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from botocore.exceptions import ClientError
@@ -31,16 +31,21 @@ def _event(resource="/v1/integrations", method="GET", body=None, params=None,
 
 @pytest.fixture
 def secrets():
-    client = MagicMock()
-    client.get_secret_value.return_value = {
-        "SecretString": json.dumps(
-            {"log_platform": {"endpoint": "https://logs.example.com/q", "api_key": "old"},
-             "vcs": {}, "remediation_platform": {}, "ims": {}}
-        )
-    }
-    with patch.object(tenant_settings, "_secrets", client), \
+    document = json.dumps(
+        {"log_platform": {"endpoint": "https://logs.example.com/q", "api_key": "old"},
+         "vcs": {}, "remediation_platform": {}, "ims": {}}
+    )
+    with patch.object(tenant_settings.paramstore, "read", return_value=document) as read, \
+         patch.object(tenant_settings.paramstore, "write") as write, \
          patch.object(tenant_settings.audit, "record_audit") as record:
-        yield {"client": client, "audit": record}
+        yield {"read": read, "write": write, "audit": record}
+
+
+def _written(secrets):
+    """The integration document this handler handed to Parameter Store."""
+    _tenant, kind, payload = secrets["write"].call_args.args
+    assert kind == tenant_settings.paramstore.INTEGRATION_CREDS, kind
+    return json.loads(payload)
 
 
 # ---------------------------------------------------------------------------
@@ -66,7 +71,7 @@ def test_only_an_admin_may_write_an_integration(secrets):
         None,
     )
     assert resp["statusCode"] == 403
-    secrets["client"].put_secret_value.assert_not_called()
+    secrets["write"].assert_not_called()
 
 
 def test_a_refused_write_is_audited(secrets):
@@ -103,8 +108,8 @@ def test_an_unconfigured_integration_reports_no_key(secrets):
 
 
 def test_a_tenant_with_no_secret_yet_reads_as_empty(secrets):
-    secrets["client"].get_secret_value.side_effect = ClientError(
-        {"Error": {"Code": "ResourceNotFoundException", "Message": "x"}}, "GetSecretValue"
+    secrets["read"].side_effect = ClientError(
+        {"Error": {"Code": "ParameterNotFound", "Message": "x"}}, "GetParameter"
     )
     body = json.loads(tenant_settings.handler(_event(), None)["body"])
     assert body["integrations"]["log_platform"]["api_key_set"] is False
@@ -121,13 +126,12 @@ def _put(integration="log_platform", body=None):
     )
 
 
-def test_an_integration_is_written_into_the_tenants_own_secret(secrets):
+def test_an_integration_is_written_into_the_tenants_own_parameter(secrets):
     resp = tenant_settings.handler(_put(), None)
 
     assert resp["statusCode"] == 200
-    kwargs = secrets["client"].put_secret_value.call_args.kwargs
-    assert kwargs["SecretId"] == "app-b9dac5ac-bc8fbf47-tenant-acme-integration-creds"
-    assert json.loads(kwargs["SecretString"])["log_platform"] == {
+    assert secrets["write"].call_args.args[0] == "acme"
+    assert _written(secrets)["log_platform"] == {
         "endpoint": "https://logs.example.com/q", "api_key": "k"
     }
 
@@ -135,7 +139,7 @@ def test_an_integration_is_written_into_the_tenants_own_secret(secrets):
 def test_the_other_integrations_are_left_untouched(secrets):
     tenant_settings.handler(_put("vcs", {"endpoint": "https://vcs.example.com/c"}), None)
 
-    written = json.loads(secrets["client"].put_secret_value.call_args.kwargs["SecretString"])
+    written = _written(secrets)
     assert written["log_platform"]["api_key"] == "old"
     assert written["vcs"]["endpoint"] == "https://vcs.example.com/c"
 
@@ -143,7 +147,7 @@ def test_the_other_integrations_are_left_untouched(secrets):
 def test_an_unknown_integration_is_rejected(secrets):
     resp = tenant_settings.handler(_put("not_a_platform"), None)
     assert resp["statusCode"] == 400
-    secrets["client"].put_secret_value.assert_not_called()
+    secrets["write"].assert_not_called()
 
 
 def test_a_literal_internal_address_is_refused_at_write_time(secrets):
@@ -155,7 +159,7 @@ def test_a_literal_internal_address_is_refused_at_write_time(secrets):
 
     assert resp["statusCode"] == 400
     assert "endpoint" in json.loads(resp["body"])["message"]
-    secrets["client"].put_secret_value.assert_not_called()
+    secrets["write"].assert_not_called()
 
 
 def test_a_non_https_endpoint_is_rejected(secrets):
@@ -192,7 +196,7 @@ def test_clearing_an_integration_removes_it(secrets):
     )
 
     assert resp["statusCode"] == 200
-    written = json.loads(secrets["client"].put_secret_value.call_args.kwargs["SecretString"])
+    written = _written(secrets)
     assert written["log_platform"] == {}
 
 

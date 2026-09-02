@@ -88,12 +88,13 @@ def test_the_scripts_and_the_template_agree_on_the_prefix():
 
 
 def test_the_runtime_prefix_matches_the_deployed_one():
-    """Secret names are built in Python, and IAM only allows this prefix.
+    """Resource names are built in Python, and IAM only allows this prefix.
 
-    common.config.PREFIX feeds every Secrets Manager name the handlers touch
-    (``{PREFIX}-tenant-{id}-dek`` and friends), while the policies that authorise
-    them are written as ``${NamePrefix}-tenant-*``. If the two disagree the
-    deploy still succeeds and every tenant operation fails with AccessDenied.
+    common.config.PREFIX feeds every table name and every per-tenant SSM
+    parameter path the handlers touch (``/{PREFIX}/tenant/{id}/dek`` and
+    friends), while the policies that authorise them are written as
+    ``${NamePrefix}/tenant/*``. If the two disagree the deploy still succeeds and
+    every tenant operation fails with AccessDenied.
     """
     assert 'os.environ.get("NAME_PREFIX"' in CONFIG, (
         "config.PREFIX is not read from the NAME_PREFIX environment variable, so "

@@ -31,9 +31,9 @@ Globals:
       - !Ref CommonLayer
     Environment:
       Variables:
-        # The handlers build Secrets Manager names themselves
-        # ({PREFIX}-tenant-{id}-dek and friends); this is how they land on the
-        # same prefix the IAM policies below authorise.
+        # The handlers build their own SSM parameter names
+        # (/{PREFIX}/tenant/{id}/dek and friends); this is how they land on the
+        # same path the IAM policies below authorise.
         NAME_PREFIX: !Ref NamePrefix
         TENANTS_TABLE: !Ref TenantsTable
         ALERTS_TABLE: !Ref AlertsTable
@@ -533,8 +533,8 @@ Resources:
                 - sts:TagSession
               Resource: !GetAtt TenantScopedRole.Arn
             - Effect: Allow
-              Action: secretsmanager:GetSecretValue
-              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${NamePrefix}-tenant-*-ingest-hmac-*
+              Action: ssm:GetParameter
+              Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${NamePrefix}/tenant/*/ingest-hmac
       Events:
         PostAlert:
           Type: Api
@@ -562,8 +562,8 @@ Resources:
                 - sts:TagSession
               Resource: !GetAtt TenantScopedRole.Arn
             - Effect: Allow
-              Action: secretsmanager:GetSecretValue
-              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${NamePrefix}-tenant-*-integration-creds-*
+              Action: ssm:GetParameter
+              Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${NamePrefix}/tenant/*/integration-creds
 
   CorrelateConfigFunction:
     Type: AWS::Serverless::Function
@@ -582,8 +582,8 @@ Resources:
                 - sts:TagSession
               Resource: !GetAtt TenantScopedRole.Arn
             - Effect: Allow
-              Action: secretsmanager:GetSecretValue
-              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${NamePrefix}-tenant-*-integration-creds-*
+              Action: ssm:GetParameter
+              Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${NamePrefix}/tenant/*/integration-creds
 
   RagContextFunction:
     Type: AWS::Serverless::Function
@@ -630,8 +630,8 @@ Resources:
                 - sts:TagSession
               Resource: !GetAtt TenantScopedRole.Arn
             - Effect: Allow
-              Action: secretsmanager:GetSecretValue
-              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${NamePrefix}-tenant-*-dek-*
+              Action: ssm:GetParameter
+              Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${NamePrefix}/tenant/*/dek
             - Effect: Allow
               Action: bedrock:InvokeModel
               Resource:
@@ -717,8 +717,8 @@ Resources:
       Policies:
         - Statement:
             - Effect: Allow
-              Action: secretsmanager:GetSecretValue
-              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${NamePrefix}-tenant-*-integration-creds-*
+              Action: ssm:GetParameter
+              Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${NamePrefix}/tenant/*/integration-creds
 
   AuditWriteFunction:
     Type: AWS::Serverless::Function
@@ -858,8 +858,12 @@ Resources:
               Action: dynamodb:PutItem
               Resource: !GetAtt TenantsTable.Arn
             - Effect: Allow
-              Action: secretsmanager:CreateSecret
-              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${NamePrefix}-tenant-*
+              # PutParameter, not secretsmanager:CreateSecret: the deploy
+              # permissions boundary grants Secrets Manager read only, so
+              # CreateSecret was denied on every signup and left the user with
+              # no custom:tenant_id. See common/paramstore.py.
+              Action: ssm:PutParameter
+              Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${NamePrefix}/tenant/*
             # Sets custom:tenant_id, and puts the tenant's first user in
             # TenantAdmin. Nothing else grants group membership, so without this
             # no one could ever approve remediation.
@@ -879,7 +883,7 @@ Resources:
               Resource: !Sub arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/*
 
   # The write path for per-tenant integration credentials, which had none.
-  # fn-tenant-provision creates the secret with four empty objects and nothing
+  # fn-tenant-provision creates the parameter with four empty objects and nothing
   # could ever fill them in, so on a fresh deployment both correlation stages
   # returned "no platform configured" permanently, the IMS was never notified and
   # every approval recorded execution_status "skipped".
@@ -898,9 +902,9 @@ Resources:
         - Statement:
             - Effect: Allow
               Action:
-                - secretsmanager:GetSecretValue
-                - secretsmanager:PutSecretValue
-              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${NamePrefix}-tenant-*-integration-creds-*
+                - ssm:GetParameter
+                - ssm:PutParameter
+              Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${NamePrefix}/tenant/*/integration-creds
             - Effect: Allow
               Action: lambda:InvokeFunction
               Resource: !GetAtt AuditWriteFunction.Arn
@@ -958,8 +962,8 @@ Resources:
                 - sts:TagSession
               Resource: !GetAtt TenantScopedRole.Arn
             - Effect: Allow
-              Action: secretsmanager:GetSecretValue
-              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${NamePrefix}-tenant-*-dek-*
+              Action: ssm:GetParameter
+              Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${NamePrefix}/tenant/*/dek
       Events:
         # These three were implemented and documented in the handler and wired to
         # nothing, so the incident list, the pipeline stage timeline and the whole
@@ -1028,10 +1032,10 @@ Resources:
                 - sts:TagSession
               Resource: !GetAtt TenantScopedRole.Arn
             - Effect: Allow
-              Action: secretsmanager:GetSecretValue
+              Action: ssm:GetParameter
               Resource:
-                - !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${NamePrefix}-tenant-*-integration-creds-*
-                - !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${NamePrefix}-tenant-*-dek-*
+                - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${NamePrefix}/tenant/*/integration-creds
+                - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${NamePrefix}/tenant/*/dek
             - Effect: Allow
               Action: lambda:InvokeFunction
               Resource:

@@ -57,7 +57,7 @@ def harness(table):
     shared with fn-create-incident and lives there now.
     """
     with patch.object(
-        ingest_normalize._secrets, "get_secret_value", return_value={"SecretString": SECRET}
+        ingest_normalize.paramstore, "read", return_value=SECRET
     ), patch.object(ingest_normalize.tenant_scope, "tenant_dynamodb_resource") as resource, patch.object(
         alerts._events, "put_events", return_value={"FailedEntryCount": 0}
     ) as put_events:

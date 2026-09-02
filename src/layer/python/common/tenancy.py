@@ -59,8 +59,8 @@ def is_public_domain(email):
 def tenant_id_for_email(email):
     """Derive a stable tenant id from an email address, or None.
 
-    The domain is slugified so the result is safe as a DynamoDB partition key, a
-    Secrets Manager name component and an IAM session tag value.
+    The domain is slugified so the result is safe as a DynamoDB partition key, an
+    SSM parameter path segment and an IAM session tag value.
     """
     domain = email_domain(email)
     if domain is None or domain in PUBLIC_EMAIL_DOMAINS:

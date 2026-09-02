@@ -578,3 +578,148 @@ def test_every_name_the_stack_chooses_carries_this_runs_prefix(stack):
     assert not wrong, (
         f"names not derived from NamePrefix ({name_prefix}): " + "; ".join(wrong)
     )
+
+
+# ---------------------------------------------------------------------------
+# The deploy permissions boundary
+# ---------------------------------------------------------------------------
+# These three exist because of one outage. fn-tenant-provision asked for
+# secretsmanager:CreateSecret; the boundary every role here must carry
+# (brd-architect-deploy-boundary) grants Secrets Manager READ only. The deploy
+# succeeded, IAM refused the call at runtime, the PostConfirmation trigger threw,
+# and every user was confirmed with no custom:tenant_id -- which the console
+# renders as a dead end straight after a successful sign-in. Nothing in the suite
+# could see it, because a boundary is invisible to a mocked boto3 client.
+SECRETS_MANAGER_WRITES = (
+    "secretsmanager:CreateSecret",
+    "secretsmanager:PutSecretValue",
+    "secretsmanager:UpdateSecret",
+    "secretsmanager:DeleteSecret",
+    "secretsmanager:TagResource",
+)
+
+
+def _all_statements(stack):
+    """(role logical id, statement) for every inline policy the stack creates."""
+    for name, resource in stack["Resources"].items():
+        if resource["Type"] != "AWS::IAM::Role":
+            continue
+        for policy in resource["Properties"].get("Policies", []):
+            for statement in policy["PolicyDocument"]["Statement"]:
+                yield name, statement
+
+
+def _resource_strings(statement):
+    """Every Resource on `statement`, with Fn::Sub reduced to its template."""
+    resource = statement.get("Resource", [])
+    if not isinstance(resource, list):
+        resource = [resource]
+    out = []
+    for item in resource:
+        if isinstance(item, str):
+            out.append(item)
+        elif isinstance(item, dict) and "Fn::Sub" in item:
+            value = item["Fn::Sub"]
+            out.append(value[0] if isinstance(value, list) else value)
+    return out
+
+
+def test_no_role_asks_for_a_secrets_manager_write(stack):
+    """A write the boundary forbids deploys cleanly and fails at runtime."""
+    offenders = []
+    for role, statement in _all_statements(stack):
+        for action in _actions(statement) & set(SECRETS_MANAGER_WRITES):
+            offenders.append(f"{role}: {action}")
+
+    assert not offenders, (
+        "the deploy boundary grants Secrets Manager read only, so these fail at "
+        "runtime rather than at deploy time: " + "; ".join(sorted(offenders))
+    )
+
+
+def test_every_ssm_parameter_grant_stays_under_this_projects_path(stack):
+    """The boundary allows parameter/app-* only. A grant outside it is denied."""
+    offenders = []
+    for role, statement in _all_statements(stack):
+        if not any(a.startswith("ssm:") for a in _actions(statement)):
+            continue
+        for resource in _resource_strings(statement):
+            if ":parameter/" not in resource:
+                continue
+            path = resource.split(":parameter/", 1)[1]
+            if not path.startswith("${NamePrefix}/"):
+                offenders.append(f"{role}: {resource}")
+
+    assert not offenders, (
+        "SSM grants outside parameter/${NamePrefix}/: " + "; ".join(sorted(offenders))
+    )
+
+
+# Calls that end in a parameter read. common.crypto and common.integrations wrap
+# paramstore.read, so their own call to it is reached only through one of their
+# public readers below -- which is why they are exempted from that pattern. Without
+# the exemption every importer of common.crypto looks like a reader, including
+# fn-tenant-provision, which imports it only for generate_dek and never reads.
+PARAMETER_READERS = (
+    "paramstore.read(",
+    "crypto.get_fernet(",
+    "crypto.encrypt_field(",
+    "crypto.decrypt_field(",
+    "integrations.creds(",
+)
+READ_WRAPPERS = ("common.crypto", "common.integrations")
+
+
+def _reads_a_parameter(module):
+    """Whether `module`'s own source performs a per-tenant parameter read."""
+    if module.startswith("common."):
+        path = COMMON / f"{module.split('.', 1)[1]}.py"
+    else:
+        path = HANDLERS / f"{module}.py"
+    if not path.exists():
+        return False
+    source = path.read_text()
+    patterns = [
+        pattern
+        for pattern in PARAMETER_READERS
+        if not (module in READ_WRAPPERS and pattern == "paramstore.read(")
+    ]
+    return any(pattern in source for pattern in patterns)
+
+
+def test_every_function_that_reads_tenant_key_material_may_read_its_parameters(stack):
+    """A function that decrypts a field or reads an integration credential needs
+    ssm:GetParameter, or it fails on first use -- the same runtime-only IAM
+    failure as the outage above, just in a different handler.
+    """
+    graph = _module_imports()
+    missing = []
+    for function, (module, role) in sorted(_lambda_functions(stack).items()):
+        if module not in graph:
+            continue
+        reachable = {module} | {m for m in graph if _reaches(graph, module, m)}
+        if not any(_reads_a_parameter(m) for m in reachable):
+            continue
+        allowed = set()
+        for statement in _role_statements(stack, role):
+            if any(":parameter/" in r for r in _resource_strings(statement)):
+                allowed |= _actions(statement)
+        if "ssm:GetParameter" not in allowed:
+            missing.append(f"{function} ({module})")
+
+    assert not missing, (
+        "functions that read per-tenant key material without ssm:GetParameter: "
+        + ", ".join(missing)
+    )
+
+
+def test_the_provisioning_trigger_may_write_the_key_material_it_creates(stack):
+    """The grant whose absence caused the outage, asserted directly."""
+    allowed = set()
+    for statement in _role_statements(stack, "TenantProvisionFunctionRole"):
+        if any(":parameter/" in r for r in _resource_strings(statement)):
+            allowed |= _actions(statement)
+    assert "ssm:PutParameter" in allowed, (
+        "fn-tenant-provision cannot create a tenant's DEK, so every signup "
+        f"leaves the user without custom:tenant_id; it has {sorted(allowed)}"
+    )

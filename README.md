@@ -65,7 +65,7 @@ short-lived `sts:AssumeRole` session tagged with the caller's `tenant_id`
 application code cannot leak one tenant's data to another. Sensitive diagnosis
 fields — the RCA summary, the remediation steps and the retrieved-incident
 references — are encrypted at rest with a per-tenant data encryption key stored
-in Secrets Manager.
+in SSM Parameter Store (see `common/paramstore.py`).
 
 Which tenant a user belongs to is decided server-side and only once, by the
 `PostConfirmation` trigger, from their verified email domain. It is deliberately
@@ -83,7 +83,7 @@ remediation at all.
 Outbound calls to tenant-configured endpoints (log platform, VCS, remediation
 platform, IMS) go through one guard in `common/http.py`: https only, the resolved
 address must be public, redirects are refused, and the response is size-capped.
-Those URLs come out of a tenant's own secret, so they are attacker-controlled
+Those URLs come out of a tenant's own integration parameter, so they are attacker-controlled
 input into a function holding tenant credentials. The guard is in two halves:
 `assert_target_shape` judges what a URL shows on its own (scheme, and a literal
 IP) and is what the settings API validates a stored endpoint against; the full
@@ -140,12 +140,13 @@ the endpoint and a boolean for whether a key is set, never the key.
     described above.
   - Cognito: a user pool with a `tenant_id` custom attribute, self-signup,
     `TenantAdmin`/`TenantEngineer` groups, and a `PostConfirmation` trigger
-    that provisions the tenant's DynamoDB row and per-tenant secrets.
-  - Secrets Manager: per-tenant webhook HMAC secret, integration
-    credentials, and encryption key, all under the run prefix. These names are
-    built in Python from `common.config.PREFIX`, which the stack sets from
-    `NAME_PREFIX` — the one name in the system not written in the template, and
-    the reason that variable exists.
+    that provisions the tenant's DynamoDB row and per-tenant key material.
+  - SSM Parameter Store: per-tenant webhook HMAC secret, integration
+    credentials, and encryption key, all under `/{prefix}/tenant/{tenant_id}/`.
+    These paths are built in Python from `common.config.PREFIX`, which the stack
+    sets from `NAME_PREFIX` — the one name in the system not written in the
+    template, and the reason that variable exists. Not Secrets Manager: see
+    "Per-tenant key material lives in Parameter Store" below.
   - IAM: a `TenantScopedRole` assumed (with session tags) by every function
     that touches tenant data, plus per-function least-privilege policies.
 - **`src/handlers/`** — the Lambda function source described above.
@@ -263,7 +264,7 @@ silently stopped shows up rather than being omitted for having nothing to measur
 
 Every physical name in the stack — tables, buckets, queues, topics, functions,
 roles, log groups, alarms, the state machine, the APIs, the Cognito pool and the
-per-tenant secrets — is derived from a single CloudFormation parameter:
+per-tenant parameter paths — is derived from a single CloudFormation parameter:
 
 ```yaml
 Parameters:
@@ -335,6 +336,41 @@ open frontend/prototype.html     # the offline design reference
 `app_url` in `outputs.json` is the console's CloudFront URL. `AdminApiUrl` is the
 authenticated REST API; it is not browsable without a Cognito ID token.
 
+## Repairing users stranded by the provisioning outage
+
+`fn-tenant-provision` is a `PostConfirmation` trigger, and Cognito runs it exactly
+once per user. While it was asking for `secretsmanager:CreateSecret` — an action
+the deploy permissions boundary does not grant — it raised on every signup. It
+catches `ClientError` and never re-raises (an unscoped user is denied by the
+authorizer, which is the safe outcome), so the failure was silent: each user was
+left `CONFIRMED` with no `custom:tenant_id`, and the console showed them the "no
+tenant" screen immediately after a successful sign-in. From the outside this looks
+like a login that will not go through.
+
+Fixing the trigger does not help anyone who signed up while it was broken, because
+it will never run for them again. `scripts/backfill_tenants.py` does what their
+PostConfirmation run should have done. It drives the real trigger with a
+synthesised event rather than reimplementing provisioning, so the two cannot
+disagree about who becomes a `TenantAdmin`:
+
+```
+# what would change — writes nothing
+python3 scripts/backfill_tenants.py --user-pool-id "$(python3 -c '
+import json; print(json.load(open("outputs.json"))["UserPoolId"])')"
+
+# do it
+python3 scripts/backfill_tenants.py --user-pool-id ... --apply
+```
+
+It skips users who already have a tenant, skips users still `UNCONFIRMED` (the
+fixed trigger will handle those), and reports — without touching — any account
+whose address yields no tenant, such as a consumer domain. Because the trigger
+swallows errors by design, the script re-reads each user afterwards rather than
+trusting that the call did not raise, and exits non-zero if anyone is still
+unscoped. It needs credentials permitted to call `cognito-idp` `Admin*`,
+`ssm:PutParameter` under `/{prefix}/tenant/*` and `dynamodb:PutItem` on the
+tenants table. It is a one-off repair, deliberately not wired into `deploy.sh`.
+
 ## Known limitations and deliberate trade-offs
 
 **Sign-up does not verify the email address.** `fn-pre-signup` auto-confirms every
@@ -359,6 +395,21 @@ endpoints that do: the incident list, incident detail with the live pipeline
 timeline, incident creation, the approval gate, the team screen and the leadership
 overview. `frontend/prototype.html` remains in the repo as the offline design
 reference for the chat surface and is no longer deployed.
+
+**Per-tenant key material lives in Parameter Store, as `String`.** The DEK, the
+ingest HMAC secret and the integration credentials are SSM parameters under
+`/{prefix}/tenant/{tenant_id}/`, not Secrets Manager secrets. This is forced by
+the deploy permissions boundary (`brd-architect-deploy-boundary`), which grants
+Secrets Manager read only — no `CreateSecret` — so a PostConfirmation trigger can
+never create a tenant's DEK. The same boundary grants no `kms:*`, which rules out
+`SecureString`: it needs `kms:Encrypt` to write and `kms:Decrypt` to read. The
+consequence is real — Parameter Store still encrypts at rest with an AWS-owned
+key, but anyone holding `ssm:GetParameter` on that path reads the plaintext,
+where a `SecureString` would additionally require a grant on the key. Given the
+alternative is an application that cannot provision a tenant at all, this is the
+trade-off taken. `common/paramstore.py` is the only module that talks to the
+store, so moving to Secrets Manager or a customer-managed key later is a change
+in one file plus the IAM statements.
 
 **Runbook documents are not encrypted with the tenant DEK.** The RCA text is, in
 the Diagnostics table; the runbook that restates it is written to S3 under bucket

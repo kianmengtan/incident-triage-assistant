@@ -67,15 +67,32 @@ fi
 # ---------------------------------------------------------------------------
 # Resources CloudFormation never owned.
 # ---------------------------------------------------------------------------
-echo "==> Cleaning up per-tenant Secrets Manager entries"
-SECRET_ARNS=$(aws secretsmanager list-secrets \
+# fn-tenant-provision writes these at signup, so CloudFormation never owned them
+# and DeleteStack leaves them behind. They are SSM parameters rather than Secrets
+# Manager secrets because the deploy permissions boundary grants Secrets Manager
+# read only -- see src/layer/python/common/paramstore.py.
+echo "==> Cleaning up per-tenant SSM parameters"
+TENANT_PARAMS=$(aws ssm get-parameters-by-path \
+  --path "/${PREFIX}/tenant" \
+  --recursive \
   --region "${REGION}" \
-  --filters Key=name,Values="${PREFIX}-tenant-" \
-  --query 'SecretList[].ARN' \
+  --query 'Parameters[].Name' \
   --output text || true)
-for arn in ${SECRET_ARNS}; do
-  aws secretsmanager delete-secret --secret-id "${arn}" --force-delete-without-recovery --region "${REGION}" >/dev/null || true
+# delete-parameters takes at most ten names per call.
+BATCH=""
+COUNT=0
+for name in ${TENANT_PARAMS}; do
+  BATCH="${BATCH} ${name}"
+  COUNT=$((COUNT + 1))
+  if [ "${COUNT}" -eq 10 ]; then
+    aws ssm delete-parameters --names ${BATCH} --region "${REGION}" >/dev/null || true
+    BATCH=""
+    COUNT=0
+  fi
 done
+if [ -n "${BATCH}" ]; then
+  aws ssm delete-parameters --names ${BATCH} --region "${REGION}" >/dev/null || true
+fi
 
 echo "==> Deleting the deploy artifacts bucket"
 empty_bucket "${ARTIFACTS_BUCKET}"
