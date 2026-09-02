@@ -67,6 +67,10 @@
 
 *, *::before, *::after { box-sizing: border-box; }
 
+/* Author display rules such as .auth-wrap { display: grid } otherwise override
+   the browser's default styling for the hidden attribute. */
+[hidden] { display: none !important; }
+
 body {
   margin: 0;
   background: var(--color-bg);

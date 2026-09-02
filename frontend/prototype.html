@@ -66,6 +66,9 @@
 
 * { box-sizing: border-box; }
 
+/* Keep hidden UI hidden even when a component has its own display rule. */
+[hidden] { display: none !important; }
+
 html, body { height: 100%; }
 body {
   margin: 0;
