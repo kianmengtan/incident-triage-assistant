@@ -74,6 +74,10 @@ def _effect(resp):
     return resp["policyDocument"]["Statement"][0]["Effect"]
 
 
+def _resource(resp):
+    return resp["policyDocument"]["Statement"][0]["Resource"]
+
+
 # --------------------------------------------------------------------- allowed
 
 
@@ -83,6 +87,14 @@ def test_a_valid_token_is_allowed_with_tenant_and_group_in_context():
     assert _effect(resp) == "Allow"
     assert resp["context"] == {"tenant_id": "acme", "group": "TenantAdmin"}
     assert resp["principalId"] == "ada"
+
+
+def test_a_cached_allow_policy_covers_every_route_in_the_api_stage():
+    """The token is the authorizer cache key, so an exact-method policy would
+    make whichever route was requested first the only usable route for five
+    minutes."""
+    resp = authorizer.handler(_event(_token()), None)
+    assert _resource(resp) == "arn:aws:execute-api:ap-southeast-1:1:api/prod/*/*"
 
 
 def test_the_highest_priority_group_wins():

@@ -39,6 +39,17 @@ def _policy(principal_id, effect, resource, context=None):
     }
 
 
+def _api_stage_arn(method_arn):
+    """The whole API stage covered by a cached successful authorization.
+
+    API Gateway caches this policy by bearer token. Returning only ``methodArn``
+    would allow the first route requested and make every different route fail
+    until the five-minute authorizer cache expired.
+    """
+    api_arn, stage, *_ = method_arn.split("/")
+    return f"{api_arn}/{stage}/*/*"
+
+
 def handler(event, context):
     method_arn = event["methodArn"]
 
@@ -59,6 +70,6 @@ def handler(event, context):
     return _policy(
         principal,
         "Allow",
-        method_arn,
+        _api_stage_arn(method_arn),
         {"tenant_id": tenant_id, "group": jwt.highest_priority_group(claims)},
     )
