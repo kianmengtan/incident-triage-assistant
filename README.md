@@ -101,13 +101,14 @@ the endpoint and a boolean for whether a key is set, never the key.
     and an admin API behind a custom Lambda authorizer backed by Cognito
     (diagnostics/runbook reads, remediation approval, authenticated incident
     creation, and team/role management).
-  - Lambda: 18 functions (ingestion/normalization, log correlation, config
+  - Lambda: 20 functions (ingestion/normalization, log correlation, config
     correlation, RAG context retrieval, RCA/remediation generation, runbook
-    generation, notifications, audit recording, tenant provisioning, sign-up
-    admission, authenticated incident creation, team/role management, the
-    admin authorizer, diagnostics/runbook queries, remediation approval, and
-    the S3 Vectors setup pair described below), all Python 3.13, sharing one
-    Lambda Layer (`common/`) for config, tenant-scoped AWS clients,
+    generation, notifications, marking a failed pipeline, incident-management
+    notification, audit recording, tenant provisioning, sign-up admission,
+    authenticated incident creation, team/role management, tenant integration
+    settings, the admin authorizer, diagnostics/runbook queries, remediation
+    approval, and the S3 Vectors setup pair described below), all Python 3.13,
+    sharing one Lambda Layer (`common/`) for config, tenant-scoped AWS clients,
     encryption, Bedrock calls, RBAC, and audit helpers.
   - Step Functions: `diagnosis_pipeline.asl.json` orchestrates correlation →
     RAG → RCA generation → runbook generation → notification, with
@@ -171,8 +172,8 @@ the endpoint and a boolean for whether a key is set, never the key.
 - **`tests/`** — pytest unit tests (mocking all AWS calls) covering
   ingestion dedup/HMAC validation, tenant-scoped query enforcement,
   admin-approval authorization, audit recording, and the S3 Vectors
-  setup/async-trigger handlers; run with `pytest tests/ -q` (25 tests, all
-  passing).
+  setup/async-trigger handlers; run with `pytest -q` (445 tests across 32
+  files, all passing).
 - **`deploy.sh`** / **`destroy.sh`** — idempotent build/deploy and teardown
   scripts using `sam build`/`sam deploy` against a self-managed artifacts
   bucket (`<prefix>-artifacts`), writing `outputs.json`
@@ -311,8 +312,8 @@ are isolated from each other's roles as well as their data.
 ```
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r tests/requirements-test.txt
-pytest -q                        # 399 backend tests
-(cd frontend && npm test)        # 111 console tests
+pytest -q                        # 445 backend tests
+(cd frontend && npm test)        # 116 console tests
 (cd frontend && npm run check-sync)  # the inlined logic has not drifted
 cfn-lint template.yaml           # template lint, no AWS credentials needed
 sam validate --template-file template.yaml --region ap-southeast-1 --lint
