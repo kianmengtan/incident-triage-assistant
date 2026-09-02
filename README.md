@@ -57,6 +57,13 @@ remediation runbook, with minimal human effort:
    attempt is written to the audit trail both before and after — including
    refused attempts. Declining is a recorded decision too, not a UI-only state.
 
+Alongside that pipeline, **Ask** is a conversational read surface over the same
+data: `POST /v1/chat` sends a question to `fn-chat`, which answers it by calling
+read-only tools (the incident list, one incident's pipeline status, its
+diagnosis, its runbooks, the audit trail) and summarising what they return with
+Claude Haiku. It cannot change anything — see "Ask" under The console for why
+that is a structural property rather than a prompt instruction.
+
 Every step is scoped to the tenant that owns the alert: DynamoDB rows are
 partitioned by `tenant_id`, S3 objects live under a `tenant/{tenant_id}/`
 prefix, and reads/writes are additionally enforced at the IAM layer via a
@@ -100,14 +107,15 @@ the endpoint and a boolean for whether a key is set, never the key.
   - API Gateway: a public, API-key-gated ingestion API (`POST /v1/alerts`)
     and an admin API behind a custom Lambda authorizer backed by Cognito
     (diagnostics/runbook reads, remediation approval, authenticated incident
-    creation, and team/role management).
-  - Lambda: 20 functions (ingestion/normalization, log correlation, config
+    creation, team/role management, and the conversational `POST /v1/chat`).
+  - Lambda: 21 functions (ingestion/normalization, log correlation, config
     correlation, RAG context retrieval, RCA/remediation generation, runbook
     generation, notifications, marking a failed pipeline, incident-management
     notification, audit recording, tenant provisioning, sign-up admission,
     authenticated incident creation, team/role management, tenant integration
     settings, the admin authorizer, diagnostics/runbook queries, remediation
-    approval, and the S3 Vectors setup pair described below), all Python 3.13,
+    approval, the conversational read surface, and the S3 Vectors setup pair
+    described below), all Python 3.13,
     sharing one Lambda Layer (`common/`) for config, tenant-scoped AWS clients,
     encryption, Bedrock calls, RBAC, and audit helpers.
   - Step Functions: `diagnosis_pipeline.asl.json` orchestrates correlation →
@@ -240,6 +248,75 @@ account-wide rather than tenant-scoped:
   is ever made an admin automatically, so a tenant that demoted its only one could
   never get another and approving remediation would become permanently impossible.
 
+### Ask
+
+The landing view. A question goes to `POST /v1/chat`; `fn-chat` runs a Bedrock
+tool-use loop over read-only tools and answers in prose, and the console shows
+which tools it used.
+
+**It cannot approve, decline or run anything, and that is enforced three times.**
+`trigger_remediation` is the only thing in this system that alters a customer's
+live infrastructure. Its safety properties — a conditional write claiming the
+runbook from `approval_status = pending` before the external call, an `attempted`
+audit record on both sides of it — guarantee an approval executes *exactly once*.
+They cannot guarantee it executes only when a human meant it to: a model-issued
+approval is an authorised, audited, exactly-once execution of the wrong thing,
+and every control below that point behaves correctly while it happens. So:
+
+1. **In the browser, before any request.** `routeIntent` in
+   `frontend/lib/triage.mjs` resolves approval phrasing to `focus_approval`. The
+   text is answered locally and the incident's approval card is opened; nothing
+   is sent.
+2. **In `fn-chat`, before the model is invoked.** The same phrase list is
+   intercepted server-side, for any client that is not this page — curl, or a
+   future mobile app. `tests/test_chat_parity.py` fails if the two lists drift,
+   because one surface treating a phrase as a command while the other treats it
+   as a question is invisible until someone types it.
+3. **In the tool list, and then in IAM.** There is no mutating tool, so a model
+   that decided to approve has nothing to call, and `tests/test_chat.py` asserts
+   the tool set against a read-only allowlist so adding one fails the suite
+   rather than shipping. But a tool list is application code, so the credentials
+   are narrowed too: `fn-chat` is the only function that assumes
+   **`TenantScopedReadRole`** instead of `TenantScopedRole` — same tenant
+   isolation (`dynamodb:LeadingKeys` and the `tenant/{tenant_id}/` object prefix
+   are still pinned to the session tag), but `dynamodb:GetItem`, `dynamodb:Query`
+   and `s3:GetObject` and nothing else. A mutating tool added by mistake gets
+   `AccessDenied` rather than succeeding. It also cannot invoke another Lambda,
+   publish to a topic, or read a tenant's integration credentials
+   (`ssm:GetParameter` is scoped to the DEK path), so it has no route to a
+   remediation endpoint at all.
+
+   Four tests in `tests/test_template_contract.py` hold that in place: the role
+   grants no writes, it still confines both DynamoDB and S3 to one tenant,
+   `fn-chat` is the only function pointed at it, and — the easy one to get wrong
+   — a function's `TENANT_SCOPED_ROLE_ARN` and its `sts:AssumeRole` grant must
+   name the *same* role, since `common/tenant_scope.py` assumes whatever the env
+   var says and a mismatch fails at runtime rather than at deploy time.
+
+Approving therefore stays where the blast-radius warning and the acknowledgement
+checkbox already are: the incident's own card, behind `approve_remediation`.
+Asking for it in chat takes you there rather than doing it.
+
+**Tenancy and roles come from the token, never from the conversation.** The
+tenant id is read from the authorizer context and captured before any tool runs,
+so a `tenant_id` in a tool argument — model-controlled input — is never looked
+at. Every tool is gated on the same `common/rbac.py` capability the REST route
+would check (`search_audit` needs `view_audit`, so an engineer is refused with
+the matrix's own message), and only the tools the caller may actually use are
+offered to the model.
+
+**Raw application logs are deliberately not exposed.** `docs/brd.md` flags them
+as possibly carrying usernames, session ids and request data. Feeding them
+through a model and into a transcript widens that exposure well beyond the
+drawer that renders them redacted, so there is no log tool. The tools that do
+exist return explicit field projections rather than whole DynamoDB items, so an
+attribute added to a table later does not silently start reaching the model.
+
+The client caps nothing the server does not re-cap: message length, replayed
+history turns, and tool iterations are all bounded in `chat.py`, and a `system`
+entry in the replayed history is dropped rather than appended to the
+instructions.
+
 ### Raising an incident
 
 `POST /v1/alerts` on the admin API. Unlike the public webhook, which proves itself
@@ -298,12 +375,16 @@ limit. `tests/test_template_contract.py` adds the same check against the
 transformed stack, on names as CloudFormation will actually see them.
 
 Note that the stack's IAM roles trust only `${NamePrefix}-*` principals, so runs
-are isolated from each other's roles as well as their data.
+are isolated from each other's roles as well as their data. Two of them are the
+tenant-scoped data-plane roles every handler works through:
+`${NamePrefix}-role-tenant-scoped` (read/write) and
+`${NamePrefix}-role-tenant-read` (read-only, used only by `fn-chat` — see Ask).
 
 ## Bedrock models used
 
 - `global.anthropic.claude-haiku-4-5-20251001-v1:0` — RCA and remediation
-  generation, runbook drafting.
+  generation, runbook drafting, and the Ask surface's tool-use loop
+  (`run_tool_conversation` in `common/bedrock.py`).
 - `cohere.embed-multilingual-v3` — embeddings for RAG context retrieval,
   invoked directly in `ap-southeast-1` (no inference profile).
 
@@ -389,13 +470,29 @@ the handler through `common/rbac.py`, because anything the browser decides can b
 skipped with the developer tools open. `tests/test_rbac_parity.py` fails if the two
 copies disagree.
 
-**The console shows incidents and the overview, not the chat interface.**
-`design/frontend-design.md` specifies a chat-first console around a `POST /v1/chat`
-endpoint that does not exist. `frontend/app.html` implements the parts that run on
-endpoints that do: the incident list, incident detail with the live pipeline
-timeline, incident creation, the approval gate, the team screen and the leadership
-overview. `frontend/prototype.html` remains in the repo as the offline design
-reference for the chat surface and is no longer deployed.
+**The Ask surface answers from stored data only, and reads nothing live.**
+`design/frontend-design.md`'s chat-first console is now implemented:
+`POST /v1/chat` exists, `fn-chat` serves it, and Ask is the console's landing
+view alongside the incident list, incident detail with the live pipeline
+timeline, incident creation, the approval gate, the team screen and the
+leadership overview. What it cannot do is fetch anything at question time — it
+reads the rows the pipeline already wrote, so "what changed in the last deploy"
+is answerable only insofar as the config-correlation stage cached it. It also
+has no tool for raw application logs, on purpose (see Ask, above).
+`frontend/prototype.html` remains the offline design reference and is still not
+deployed; it is a fixture-driven mockup, and `frontend/test/triage.test.mjs`
+asserts it makes no network calls at all, so it is a style and interaction
+reference rather than a second implementation.
+
+**Ask's approval guard over-matches, on purpose.** The phrase list it shares with
+`routeIntent` includes bare words like `stop` and `do it`, so "why did the
+pipeline stop?" is treated as an approval command and answered with a non-answer
+about approval being a human decision, rather than being sent to the model. The
+bias is deliberate: over-matching refuses to act, while under-matching would let
+approval phrasing reach the model. Narrowing the list would change both halves of
+a safety guard and the prototype's behaviour at once, so it is left alone and
+pinned by a test in `tests/test_chat_parity.py` that explains why, rather than
+being mistaken later for an accident.
 
 **Per-tenant key material lives in Parameter Store, as `String`.** The DEK, the
 ingest HMAC secret and the integration credentials are SSM parameters under

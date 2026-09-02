@@ -511,6 +511,60 @@ Resources:
                   - !Sub ${ContextCacheBucket.Arn}/tenant/${!aws:PrincipalTag/tenant_id}/*
                   - !Sub ${RunbooksBucket.Arn}/tenant/${!aws:PrincipalTag/tenant_id}/*
 
+  # The same tenant isolation as TenantScopedRole, minus every write.
+  #
+  # fn-chat assumes this one instead, because it is the only function whose
+  # actions are chosen by a language model. Its tool list contains no mutation
+  # and a test asserts that, but a tool list is application code: this makes the
+  # credentials themselves incapable of a write, so a mutating tool added by
+  # mistake fails with AccessDenied rather than succeeding. Everything else about
+  # the isolation is identical -- dynamodb:LeadingKeys and the tenant/ object
+  # prefix are still pinned to the session's tenant_id tag.
+  TenantScopedReadRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${NamePrefix}-role-tenant-read'
+      PermissionsBoundary: arn:aws:iam::544635841962:policy/brd-architect-deploy-boundary
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+            Action:
+              - sts:AssumeRole
+              - sts:TagSession
+            Condition:
+              ArnLike:
+                aws:PrincipalArn: !Sub arn:aws:iam::${AWS::AccountId}:role/${NamePrefix}-*
+      Policies:
+        - PolicyName: tenant-scoped-read-only
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:Query
+                Resource:
+                  - !GetAtt TenantsTable.Arn
+                  - !GetAtt AlertsTable.Arn
+                  - !Sub ${AlertsTable.Arn}/index/*
+                  - !GetAtt DiagnosticsTable.Arn
+                  - !GetAtt RunbooksTable.Arn
+                  - !Sub ${RunbooksTable.Arn}/index/*
+                  - !GetAtt AuditTrailTable.Arn
+                Condition:
+                  ForAllValues:StringEquals:
+                    dynamodb:LeadingKeys:
+                      - ${aws:PrincipalTag/tenant_id}
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource:
+                  - !Sub ${ContextCacheBucket.Arn}/tenant/${!aws:PrincipalTag/tenant_id}/*
+                  - !Sub ${RunbooksBucket.Arn}/tenant/${!aws:PrincipalTag/tenant_id}/*
+
   # ---------------------------------------------------------------------
   # Pipeline Lambda functions
   # ---------------------------------------------------------------------
@@ -1011,6 +1065,58 @@ Resources:
             Path: /v1/runbooks/{runbookId}/export
             Method: get
 
+  # fn-chat: the conversational read surface over an incident.
+  #
+  # Its policy is deliberately NOT fn-trigger-remediation's, and deliberately
+  # narrower than fn-query-diagnostics': it assumes TenantScopedReadRole rather
+  # than TenantScopedRole, so these credentials cannot write a row or an object
+  # at all. It also cannot invoke another Lambda, publish to a topic, or read a
+  # tenant's integration credentials (ssm:GetParameter is scoped to the DEK
+  # path), so it has no route to a remediation endpoint. The IAM layer enforces
+  # what the tool list states.
+  ChatFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${NamePrefix}-fn-chat'
+      LoggingConfig:
+        LogGroup: !Ref ChatFunctionLogGroup
+      CodeUri: src/handlers/
+      Handler: chat.handler
+      # Up to four model turns, each with a tool read in between. The API
+      # Gateway integration gives up at 29s, so this is sized to lose to that
+      # rather than to bill turns nobody is waiting for any more.
+      Timeout: 29
+      MemorySize: 512
+      Environment:
+        Variables:
+          # Overrides the Globals value, which is the read/write role. This is
+          # the whole point: common.tenant_scope assumes whatever this names, so
+          # naming the read-only role here is what makes fn-chat's credentials
+          # incapable of a write.
+          TENANT_SCOPED_ROLE_ARN: !GetAtt TenantScopedReadRole.Arn
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - sts:AssumeRole
+                - sts:TagSession
+              Resource: !GetAtt TenantScopedReadRole.Arn
+            - Effect: Allow
+              Action: ssm:GetParameter
+              Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${NamePrefix}/tenant/*/dek
+            - Effect: Allow
+              Action: bedrock:InvokeModel
+              Resource:
+                - !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/global.anthropic.claude-haiku-4-5-20251001-v1:0
+                - arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0
+      Events:
+        Chat:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AdminApi
+            Path: /v1/chat
+            Method: post
+
   TriggerRemediationFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -1472,6 +1578,14 @@ Resources:
     UpdateReplacePolicy: Delete
     Properties:
       LogGroupName: !Sub '${NamePrefix}-fn-team-logs'
+      RetentionInDays: 14
+
+  ChatFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub '${NamePrefix}-fn-chat-logs'
       RetentionInDays: 14
 
   # ---------------------------------------------------------------------

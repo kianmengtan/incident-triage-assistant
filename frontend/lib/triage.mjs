@@ -177,10 +177,22 @@ function extractIds(text) {
 
 /* Intent routing.
  *
- * In production this is Bedrock tool-use inside fn-chat; here it stands in for
- * the model and also drives the prototype. `approve` is deliberately NOT an
- * executable intent: it resolves to `focus_approval`, which scrolls to the
- * approval card and focuses it. Typed text never triggers remediation. */
+ * Two jobs, in two different pages. In prototype.html this stands in for the
+ * model and drives the whole scripted scenario. In app.html it is the live
+ * client-side guard that runs BEFORE anything is sent to POST /v1/chat, where
+ * fn-chat does the real Bedrock tool-use.
+ *
+ * `approve` is deliberately NOT an executable intent: it resolves to
+ * `focus_approval`, which scrolls to the approval card and focuses it. Typed
+ * text never triggers remediation.
+ *
+ * That property is enforced three times, because a remediation running on live
+ * infrastructure that nobody chose is the worst thing this product could do:
+ * here, again in fn-chat before it invokes the model, and finally in fn-chat's
+ * tool list, which contains no mutation for a model to reach. The two phrase
+ * lists are pinned together by tests/test_chat_parity.py -- if this one learns
+ * a new way of saying "approve" and the server's does not, the two surfaces
+ * stop agreeing about what counts as a command. */
 function routeIntent(text) {
   var raw = String(text == null ? '' : text).trim();
   var q = raw.toLowerCase();

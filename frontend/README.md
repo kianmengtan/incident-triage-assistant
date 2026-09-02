@@ -4,8 +4,8 @@ Two pages live here, and they are for different things.
 
 | File | What it is |
 |---|---|
-| **`app.html`** | The live application. `../deploy.sh` publishes it as `index.html`, so it is what `app_url` serves. Real Cognito sign-up and sign-in, real incidents, role-based access control, and the leadership overview. Needs `config.json` beside it, which the deploy writes. |
-| **`prototype.html`** | The offline design reference for the chat-first surface. One self-contained file that opens from disk with no server and no network calls, running on fixture data. Not deployed. |
+| **`app.html`** | The live application. `../deploy.sh` publishes it as `index.html`, so it is what `app_url` serves. Real Cognito sign-up and sign-in, the Ask surface over `POST /v1/chat`, real incidents, role-based access control, and the leadership overview. Needs `config.json` beside it, which the deploy writes. |
+| **`prototype.html`** | The offline design reference. One self-contained file that opens from disk with no server and no network calls, running on fixture data — `test/triage.test.mjs` asserts it stays that way. Not deployed, and not a second implementation: it is where interaction and styling were worked out. |
 
 `lib/triage.mjs` is the source of truth for the logic both share — severity
 mapping, SLA arithmetic, the capability matrix, the overview aggregation. It is
@@ -25,6 +25,14 @@ each role can do is documented in the root `../README.md`.
 
 Locally it needs a `config.json` (API URL and user pool ids) next to it, so the
 deployed URL is the practical way to see it.
+
+**Ask** is the landing view. It posts to `POST /v1/chat` and renders the reply
+plus the tools `fn-chat` used. Typing an approval never approves anything: the
+guard runs here first (`routeIntent`, before any request is made), again in
+`fn-chat` before the model is invoked, and finally in the tool list, which
+contains no mutation at all. `test/chat.test.mjs` pins the browser half and
+`../tests/test_chat_parity.py` pins the two phrase lists together. The full
+reasoning is in the root `../README.md` under "Ask".
 
 ## The design reference
 
