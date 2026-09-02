@@ -1,0 +1,1981 @@
+<title>Arcadia Incident Triage</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* ============================================================
+   Tokens. Light palette is the project's own design system
+   (design/reference.html); the dark set is derived from it,
+   warm-biased toward the terracotta accent.
+   ============================================================ */
+:root {
+  --bg:            #FBF7F1;
+  --surface:       #FFFFFF;
+  --raised:        #F4EDE3;
+  --rule:          #E8DFD2;
+  --rule-strong:   #D3C5B1;
+  --ink:           #241C15;
+  --ink-muted:     #5C4F42;
+  --ink-faint:     #877868;
+  --accent:        #A6482B;
+  --accent-soft:   #F7E9E2;
+  --good:          #2F5D50;
+  --good-soft:     #E4EEE9;
+  --warn:          #8A5B12;
+  --warn-soft:     #F8EEDC;
+  --bad:           #9E2B25;
+  --bad-soft:      #F8E6E4;
+  /* sequential ramp, one hue, light -> dark (stage order) */
+  --seq-1: #EBCBBD;
+  --seq-2: #D89C84;
+  --seq-3: #C4715A;
+  --seq-4: #A6482B;
+  --seq-5: #7C3420;
+  --headroom: #E4DACB;
+
+  --font-display: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
+  --font-body: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --shadow: 0 1px 2px rgba(36,28,21,.05), 0 14px 34px rgba(36,28,21,.10);
+  --bar-h: 2.5rem;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg:          #15100C;
+    --surface:     #1E1712;
+    --raised:      #291F18;
+    --rule:        #3A2E24;
+    --rule-strong: #544435;
+    --ink:         #F4EBE0;
+    --ink-muted:   #C0AE9C;
+    --ink-faint:   #96826F;
+    --accent:      #DD7454;
+    --accent-soft: #37211A;
+    --good:        #77AD98;
+    --good-soft:   #1C2A25;
+    --warn:        #D6A24F;
+    --warn-soft:   #2E2416;
+    --bad:         #DE7167;
+    --bad-soft:    #321D1B;
+    --seq-1: #4A241A;
+    --seq-2: #6E3626;
+    --seq-3: #9A4E36;
+    --seq-4: #C9634A;
+    --seq-5: #EC9678;
+    --headroom: #2B231C;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 16px 38px rgba(0,0,0,.45);
+  }
+}
+:root[data-theme="dark"] {
+  --bg:          #15100C;
+  --surface:     #1E1712;
+  --raised:      #291F18;
+  --rule:        #3A2E24;
+  --rule-strong: #544435;
+  --ink:         #F4EBE0;
+  --ink-muted:   #C0AE9C;
+  --ink-faint:   #96826F;
+  --accent:      #DD7454;
+  --accent-soft: #37211A;
+  --good:        #77AD98;
+  --good-soft:   #1C2A25;
+  --warn:        #D6A24F;
+  --warn-soft:   #2E2416;
+  --bad:         #DE7167;
+  --bad-soft:    #321D1B;
+  --seq-1: #4A241A;
+  --seq-2: #6E3626;
+  --seq-3: #9A4E36;
+  --seq-4: #C9634A;
+  --seq-5: #EC9678;
+  --headroom: #2B231C;
+  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 16px 38px rgba(0,0,0,.45);
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ============================================================
+   Deck chrome
+   ============================================================ */
+.deck {
+  --stage-w: min(calc(100vw - 1.6rem), calc((100vh - 5.6rem) * 16 / 9));
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+.bar {
+  height: var(--bar-h);
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: .9rem;
+  padding: 0 1rem;
+  font-size: 11.5px;
+  color: var(--ink-muted);
+  background: var(--bg);
+}
+.topbar { border-bottom: 1px solid var(--rule); }
+.botbar { border-top: 1px solid var(--rule); }
+.mark {
+  font-family: var(--font-display);
+  font-size: 15px;
+  letter-spacing: -.01em;
+  color: var(--ink);
+}
+.mark i { font-style: normal; color: var(--accent); }
+.sect {
+  text-transform: uppercase;
+  letter-spacing: .13em;
+  font-size: 10px;
+  color: var(--ink-faint);
+}
+.spacer { flex: 1 1 auto; }
+.count { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+button.ctl {
+  font: inherit;
+  font-size: 11px;
+  color: var(--ink-muted);
+  background: var(--surface);
+  border: 1px solid var(--rule-strong);
+  border-radius: 999px;
+  padding: .28rem .7rem;
+  cursor: pointer;
+}
+button.ctl:hover { color: var(--ink); border-color: var(--accent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.rail { display: flex; gap: 2px; flex: 1 1 auto; align-items: center; }
+.rail button {
+  flex: 1 1 auto;
+  height: 5px;
+  min-width: 4px;
+  padding: 0;
+  border: 0;
+  border-radius: 2px;
+  background: var(--rule-strong);
+  cursor: pointer;
+}
+.rail button[aria-current="true"] { background: var(--accent); }
+.rail button:hover { background: var(--ink-faint); }
+
+.stagewrap {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: .8rem;
+}
+
+/* ============================================================
+   Slide
+   ============================================================ */
+.slide {
+  width: var(--stage-w);
+  aspect-ratio: 16 / 9;
+  font-size: calc(var(--stage-w) / 86);
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  box-shadow: var(--shadow);
+  padding: 2.3em 2.7em 2.1em;
+  display: grid;
+  grid-template-columns: 8.6em minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  column-gap: 2.3em;
+  row-gap: 1.05em;
+}
+.gut { grid-column: 1; grid-row: 1 / -1; }
+.head { grid-column: 2; grid-row: 1; }
+.body { grid-column: 2; grid-row: 2; min-height: 0; overflow: auto; }
+.slide.full > .gut { grid-row: 1; }
+.slide.full > .body { grid-column: 1 / -1; }
+
+.eyebrow {
+  margin: 0 0 .9em;
+  font-size: .68em;
+  text-transform: uppercase;
+  letter-spacing: .15em;
+  color: var(--accent);
+}
+.trace { margin: 0; display: flex; flex-direction: column; gap: .3em; }
+.slide.full .trace { flex-direction: row; flex-wrap: wrap; }
+.trace span {
+  font-family: var(--font-mono);
+  font-size: .66em;
+  color: var(--ink-faint);
+  border-left: 2px solid var(--rule-strong);
+  padding-left: .5em;
+  line-height: 1.35;
+}
+.slide.full .trace span { border-left: 0; border-top: 2px solid var(--rule-strong); padding: .35em .6em 0 0; }
+.gut .note {
+  margin: 1.3em 0 0;
+  font-size: .68em;
+  line-height: 1.5;
+  color: var(--ink-faint);
+}
+
+h2 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 2em;
+  line-height: 1.1;
+  letter-spacing: -.018em;
+  margin: 0;
+  text-wrap: balance;
+}
+h2 .thin { color: var(--ink-faint); font-weight: 400; }
+.lede {
+  margin: .55em 0 0;
+  font-size: 1.02em;
+  line-height: 1.5;
+  color: var(--ink-muted);
+  max-width: 62ch;
+}
+h3 {
+  font-family: var(--font-display);
+  font-size: 1.02em;
+  font-weight: 600;
+  margin: 0 0 .35em;
+  letter-spacing: -.008em;
+}
+p { line-height: 1.55; }
+.body p { font-size: .87em; margin: 0 0 .7em; max-width: 68ch; color: var(--ink-muted); }
+.body p strong { color: var(--ink); font-weight: 600; }
+code, .mono { font-family: var(--font-mono); font-size: .88em; }
+.body code {
+  background: var(--raised);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: .05em .32em;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+/* ---------- tables ---------- */
+table { width: 100%; border-collapse: collapse; font-size: .8em; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: .48em .7em .48em 0; border-bottom: 1px solid var(--rule); vertical-align: top; line-height: 1.4; }
+th {
+  font-size: .82em;
+  text-transform: uppercase;
+  letter-spacing: .1em;
+  color: var(--ink-faint);
+  font-weight: 600;
+  border-bottom: 1px solid var(--rule-strong);
+  white-space: nowrap;
+}
+td:last-child, th:last-child { padding-right: 0; }
+tbody tr:last-child td { border-bottom: 0; }
+td.id, .idcell { font-family: var(--font-mono); color: var(--accent); white-space: nowrap; }
+td.num { text-align: right; font-family: var(--font-mono); }
+.center { text-align: center; }
+.tblwrap { overflow: auto; }
+
+/* ---------- pills ---------- */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: .3em;
+  font-size: .92em;
+  line-height: 1;
+  padding: .28em .55em;
+  border-radius: 999px;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+.pill.ok   { background: var(--good-soft); color: var(--good); border-color: var(--good); }
+.pill.part { background: var(--warn-soft); color: var(--warn); border-color: var(--warn); }
+.pill.no   { background: var(--raised);    color: var(--ink-faint); border-color: var(--rule-strong); }
+
+/* ---------- layout helpers ---------- */
+.cols { display: grid; gap: 1.4em; align-items: start; }
+.c2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.c3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.c4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.stack { display: flex; flex-direction: column; gap: .9em; }
+
+.panel {
+  background: var(--raised);
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  padding: .95em 1.05em;
+}
+.panel.flat { background: transparent; border: 0; border-top: 2px solid var(--rule-strong); border-radius: 0; padding: .7em 0 0; }
+.panel p:last-child { margin-bottom: 0; }
+.panel .k {
+  font-size: .68em;
+  text-transform: uppercase;
+  letter-spacing: .12em;
+  color: var(--ink-faint);
+  margin: 0 0 .45em;
+}
+.panel.accent { border-left: 3px solid var(--accent); }
+.panel.warn { background: var(--warn-soft); border-color: var(--warn); }
+
+ul.tight, ol.tight { margin: 0; padding-left: 1.15em; font-size: .84em; line-height: 1.5; color: var(--ink-muted); }
+ul.tight li, ol.tight li { margin: 0 0 .38em; }
+ul.tight li strong, ol.tight li strong { color: var(--ink); font-weight: 600; }
+ul.bare { list-style: none; margin: 0; padding: 0; }
+
+/* ---------- figure of numbers ---------- */
+.stats { display: flex; flex-wrap: wrap; gap: 0; border-top: 2px solid var(--rule-strong); }
+.stats div { padding: .85em 1.6em .1em 0; }
+.stats .v {
+  font-family: var(--font-display);
+  font-size: 1.85em;
+  line-height: 1;
+  letter-spacing: -.02em;
+  font-variant-numeric: tabular-nums;
+}
+.stats .l {
+  font-size: .66em;
+  text-transform: uppercase;
+  letter-spacing: .11em;
+  color: var(--ink-faint);
+  margin-top: .5em;
+}
+
+/* ---------- SLA budget chart ---------- */
+.chart { margin: 0; }
+.axis { position: relative; height: 1.5em; margin-bottom: .3em; }
+.axis span {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  font-family: var(--font-mono);
+  font-size: .68em;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+.axis span:first-child { transform: none; }
+.budget {
+  display: flex;
+  gap: 2px;
+  height: 2.4em;
+  position: relative;
+  background: var(--surface);
+}
+.budget i {
+  display: block;
+  border-radius: 0;
+  position: relative;
+}
+.budget i:first-child { border-radius: 3px 0 0 3px; }
+.budget i:last-child { border-radius: 0 3px 3px 0; }
+.mark195 {
+  position: absolute;
+  left: calc((100% - 10px) * 0.65 + 10px);
+  top: -.45em;
+  bottom: -.45em;
+  width: 0;
+  border-left: 2px dashed var(--ink);
+}
+.mark195 b {
+  position: absolute;
+  left: .4em;
+  top: -.1em;
+  font-family: var(--font-mono);
+  font-size: .66em;
+  font-weight: 500;
+  color: var(--ink);
+  white-space: nowrap;
+}
+.ceiling {
+  position: absolute;
+  right: 0;
+  top: -.45em;
+  bottom: -.45em;
+  width: 0;
+  border-left: 2px solid var(--bad);
+}
+.ticks { position: relative; height: 1.1em; margin-top: .35em; }
+.ticks i { position: absolute; top: 0; width: 1px; height: .4em; background: var(--rule-strong); }
+figcaption {
+  font-size: .74em;
+  line-height: 1.5;
+  color: var(--ink-faint);
+  margin-top: .9em;
+  max-width: 78ch;
+}
+.legend { display: flex; flex-wrap: wrap; gap: .2em 1.1em; margin: .9em 0 0; font-size: .76em; color: var(--ink-muted); }
+.legend span { display: inline-flex; align-items: center; gap: .45em; }
+.legend b { width: .8em; height: .8em; border-radius: 2px; display: inline-block; }
+
+/* ---------- diagram ---------- */
+.dia { width: 100%; height: auto; display: block; color: var(--ink-muted); }
+.dia .box { fill: var(--surface); stroke: var(--rule-strong); stroke-width: 1.4; }
+.dia .store { fill: var(--raised); stroke: var(--rule-strong); stroke-width: 1.4; }
+.dia .hot { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.6; }
+.dia .frame { fill: none; stroke: var(--accent); stroke-width: 1.6; stroke-dasharray: 5 4; }
+.dia .chip { fill: var(--surface); stroke: var(--accent); stroke-width: 1.2; }
+.dia .t { fill: var(--ink); font-family: var(--font-body); font-size: 13px; font-weight: 600; }
+.dia .s { fill: var(--ink-faint); font-family: var(--font-body); font-size: 11px; }
+.dia .m { fill: var(--ink-muted); font-family: "IBM Plex Mono", monospace; font-size: 10.5px; }
+.dia .lab { fill: var(--ink-muted); font-family: var(--font-body); font-size: 10.5px; font-style: italic; }
+.dia .cap { fill: var(--accent); font-family: var(--font-body); font-size: 11px; font-weight: 600; letter-spacing: .06em; }
+.dia line, .dia polyline, .dia path.edge { stroke: var(--ink-faint); stroke-width: 1.4; fill: none; }
+.dia .dash { stroke-dasharray: 4 3; }
+.dia .ah { fill: var(--ink-faint); stroke: none; }
+
+/* ---------- cover ---------- */
+.slide.cover { grid-template-columns: minmax(0, 1fr) 11em; align-items: end; }
+.slide.cover > .lead { grid-column: 1; grid-row: 1 / -1; align-self: center; }
+.slide.cover > .aside { grid-column: 2; grid-row: 1 / -1; align-self: center; }
+.wordmark {
+  font-family: var(--font-display);
+  font-size: 5em;
+  line-height: .95;
+  letter-spacing: -.035em;
+  font-weight: 600;
+  margin: 0;
+}
+.wordmark i { font-style: normal; color: var(--accent); }
+.expand {
+  margin: .8em 0 0;
+  font-size: 1.05em;
+  line-height: 1.45;
+  color: var(--ink);
+  max-width: 34ch;
+}
+.expand b { font-weight: 600; color: var(--accent); }
+.covermeta { margin: 1.5em 0 0; font-size: .78em; color: var(--ink-faint); line-height: 1.6; }
+.covermeta code { font-family: var(--font-mono); color: var(--ink-muted); }
+.arch { width: 100%; height: auto; display: block; color: var(--rule-strong); }
+
+.slide.full > .body { display: flex; flex-direction: column; }
+.slide.full figure.chart { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.slide.full figure.chart .dia { flex: 1 1 auto; min-height: 0; height: auto; max-height: 100%; }
+.deck[data-mode="outline"] .slide.full figure.chart .dia { max-height: none; }
+
+/* ---------- outline mode ---------- */
+.deck[data-mode="outline"] { --stage-w: min(calc(100vw - 1.6rem), 1120px); }
+.deck[data-mode="outline"] .stagewrap {
+  align-items: stretch;
+  flex-direction: column;
+  gap: 1.4rem;
+  padding: 1.4rem .8rem 3rem;
+}
+.deck[data-mode="outline"] .slide {
+  aspect-ratio: auto;
+  font-size: 15px;
+  min-height: 0;
+}
+.deck[data-mode="outline"] .body { overflow: visible; }
+.deck[data-mode="outline"] .rail { visibility: hidden; }
+.deck[data-mode="outline"] .slide::before {
+  content: attr(data-n);
+  position: absolute;
+  margin: -1.6em 0 0 -1.6em;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.deck[data-mode="outline"] .slide { position: relative; }
+
+@media (max-width: 720px) {
+  .deck { --stage-w: calc(100vw - 1rem); }
+  .slide { aspect-ratio: auto; font-size: 13px; grid-template-columns: minmax(0, 1fr); }
+  .gut, .head, .body, .slide.full > .body { grid-column: 1; }
+  .gut { grid-row: 1; }
+  .head { grid-row: 2; }
+  .body { grid-row: 3; overflow: visible; }
+  .trace { flex-direction: row; flex-wrap: wrap; }
+  .trace span { border-left: 0; border-top: 2px solid var(--rule-strong); padding: .3em .6em 0 0; }
+  .cols.c2, .cols.c3, .cols.c4 { grid-template-columns: minmax(0, 1fr); }
+  .slide.cover { grid-template-columns: minmax(0, 1fr); }
+  .slide.cover > .lead, .slide.cover > .aside { grid-column: 1; }
+  .slide.cover > .aside { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}
+
+@media print {
+  .bar { display: none; }
+  .slide { break-after: page; box-shadow: none; }
+  .stagewrap { display: block; padding: 0; }
+  .slide[hidden] { display: grid !important; }
+}
+</style>
+
+<div class="deck" id="deck" data-mode="deck">
+
+  <header class="bar topbar">
+    <span class="mark">A<i>rca</i>dia</span>
+    <span class="sect" id="sect">Cover</span>
+    <span class="spacer"></span>
+    <span class="sect">app-b9dac5ac-bc8fbf47-triage &middot; ap-southeast-1</span>
+    <button class="ctl" id="modeBtn" type="button" aria-pressed="false">Outline view</button>
+  </header>
+
+  <main class="stagewrap" id="stage">
+
+    <!-- 1 ................................................................ -->
+    <section class="slide cover" data-sect="Cover" data-n="01">
+      <div class="lead">
+        <p class="eyebrow">Automated outage diagnosis &amp; remediation</p>
+        <h1 class="wordmark">A<i>rca</i>dia</h1>
+        <p class="expand">
+          <b>A</b>utomated <b>R</b>oot <b>C</b>ause <b>A</b>nalysis &amp;
+          <b>D</b>iagnostic <b>I</b>ncident <b>A</b>ssistant &mdash; a multi-tenant
+          serverless assistant that turns a raw monitoring alert into a triaged
+          incident with a proposed root cause and an approvable remediation runbook.
+        </p>
+        <div class="stats">
+          <div><p class="v">5 min</p><p class="l">Alert&nbsp;&rarr;&nbsp;runbook SLA</p></div>
+          <div><p class="v">20</p><p class="l">Lambda functions</p></div>
+          <div><p class="v">561</p><p class="l">Automated tests</p></div>
+          <div><p class="v">3</p><p class="l">Tenant roles</p></div>
+          <div><p class="v">0</p><p class="l">Cross-tenant paths</p></div>
+        </div>
+        <p class="covermeta">
+          AWS SAM &middot; Python 3.13 Lambda &middot; Step Functions &middot; Bedrock
+          <code>claude-haiku-4-5</code> + <code>cohere.embed-multilingual-v3</code> &middot;
+          S3 Vectors &middot; DynamoDB &middot; Cognito &middot; CloudFront
+        </p>
+      </div>
+      <div class="aside">
+        <svg class="arch" viewBox="0 0 88 104" role="img" aria-label="The Arcadia mark: an arch whose keystone is picked out in terracotta.">
+          <path d="M10 104 L10 44 A34 34 0 0 1 78 44 L78 104" fill="none" stroke="currentColor" stroke-width="9"/>
+          <polygon points="35,12 53,12 57,27 31,27" style="fill:var(--accent)"/>
+        </svg>
+        <p class="covermeta" style="text-align:center">The keystone &mdash;<br>the one piece that, once<br>found, holds the rest up.</p>
+      </div>
+    </section>
+
+    <!-- 2 ................................................................ -->
+    <section class="slide" data-sect="I. The mandate" data-n="02">
+      <div class="gut">
+        <p class="eyebrow">01 &middot; Problem</p>
+        <p class="trace"><span>OBJ-01</span><span>OBJ-02</span><span>OBJ-03</span></p>
+        <p class="note">Source: <span class="mono">docs/problem_statement.md</span>, approved 2025-01-16.</p>
+      </div>
+      <div class="head">
+        <h2>Triage is four manual lookups <span class="thin">before anyone touches the fix</span></h2>
+        <p class="lede">
+          When production breaks, an on-call engineer reads the alert, then goes hunting:
+          the log platform, the deploy history, the commit that landed an hour ago, and the
+          memory of whoever handled it last time. The diagnosis is slow, and it is different
+          every time depending on who is holding the pager.
+        </p>
+      </div>
+      <div class="body">
+        <div class="cols c2">
+          <div class="stack">
+            <div class="panel accent">
+              <p class="k">What the manual loop costs</p>
+              <ul class="tight">
+                <li><strong>Time</strong> &mdash; investigation happens before remediation, so every minute of it is downtime.</li>
+                <li><strong>Consistency</strong> &mdash; two engineers given the same alert produce different diagnoses and different fixes.</li>
+                <li><strong>Knowledge loss</strong> &mdash; last quarter's identical incident was resolved, written up, and then never consulted again.</li>
+              </ul>
+            </div>
+            <div class="panel">
+              <p class="k">The volume it happens at</p>
+              <div class="tblwrap"><table>
+                <tbody>
+                  <tr><td>Alerts</td><td class="num">100&ndash;500</td><td>per day, 1,000+ in a major incident</td></tr>
+                  <tr><td>Application logs</td><td class="num">10&ndash;100 GB</td><td>per day, per tenant</td></tr>
+                  <tr><td>Config changes</td><td class="num">10&ndash;100</td><td>per day, across VCS and deploys</td></tr>
+                  <tr><td>Runbooks</td><td class="num">50&ndash;100</td><td>per week, 200+ in an outage window</td></tr>
+                </tbody>
+              </table></div>
+            </div>
+          </div>
+          <div>
+            <h3>Where the time goes today</h3>
+            <figure class="chart">
+              <svg class="dia" viewBox="0 0 480 260" role="img" aria-label="Diagram: an alert reaches a human, who must query the log platform, the VCS and deploy history, and past incident write-ups separately before writing a fix.">
+                <rect class="hot" x="8" y="12" width="128" height="42" rx="4"/>
+                <text class="t" x="72" y="32" text-anchor="middle">Alert fires</text>
+                <text class="s" x="72" y="46" text-anchor="middle">severity, service, time</text>
+
+                <line x1="72" y1="54" x2="72" y2="96"/>
+                <polygon class="ah" points="72,104 68,94 76,94"/>
+
+                <rect class="box" x="8" y="106" width="128" height="46" rx="4"/>
+                <text class="t" x="72" y="126" text-anchor="middle">On-call engineer</text>
+                <text class="s" x="72" y="141" text-anchor="middle">context assembled by hand</text>
+
+                <polyline points="136,116 176,116 176,26 216,26"/>
+                <polygon class="ah" points="224,26 214,22 214,30"/>
+                <rect class="store" x="226" y="8" width="246" height="36" rx="4"/>
+                <text class="t" x="240" y="31">Log platform</text>
+                <text class="m" x="360" y="31">ELK &middot; Splunk &middot; Datadog</text>
+
+                <polyline points="136,124 190,124 190,80 216,80"/>
+                <polygon class="ah" points="224,80 214,76 214,84"/>
+                <rect class="store" x="226" y="62" width="246" height="36" rx="4"/>
+                <text class="t" x="240" y="85">VCS &amp; deploys</text>
+                <text class="m" x="360" y="85">Git &middot; Terraform &middot; Ansible</text>
+
+                <polyline points="136,132 190,132 190,134 216,134"/>
+                <polygon class="ah" points="224,134 214,130 214,138"/>
+                <rect class="store" x="226" y="116" width="246" height="36" rx="4"/>
+                <text class="t" x="240" y="139">Past incidents</text>
+                <text class="m" x="360" y="139">wikis, tickets, memory</text>
+
+                <polyline points="136,142 176,142 176,190 216,190"/>
+                <polygon class="ah" points="224,190 214,186 214,194"/>
+                <rect class="box" x="226" y="170" width="246" height="40" rx="4"/>
+                <text class="t" x="240" y="187">Diagnosis &amp; fix</text>
+                <text class="s" x="240" y="202">written from scratch, every time</text>
+
+                <text class="cap" x="8" y="238">MEAN TIME TO RESOLUTION</text>
+                <text class="s" x="8" y="252">Four serial lookups sit between the alert and the first remediation step.</text>
+              </svg>
+              <figcaption>
+                Each of the three read paths is a different system with a different
+                query language and a different set of credentials. Arcadia does not replace
+                them &mdash; it queries all three on the engineer's behalf and hands back a
+                written diagnosis.
+              </figcaption>
+            </figure>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3 ................................................................ -->
+    <section class="slide" data-sect="I. The mandate" data-n="03">
+      <div class="gut">
+        <p class="eyebrow">02 &middot; Objectives</p>
+        <p class="trace"><span>OBJ-01&ndash;03</span><span>SC-01&ndash;03</span></p>
+        <p class="note">Targets are the approved BRD's, not restated ambitions.</p>
+      </div>
+      <div class="head">
+        <h2>Three objectives, three measurable criteria</h2>
+        <p class="lede">
+          The business case is stated as a reduction against today's manual baseline, plus a
+          hard latency target. Only the third is something software can prove on its own; the
+          first two are measured against the tenant's own MTTR history after rollout.
+        </p>
+      </div>
+      <div class="body">
+        <div class="cols c2">
+          <div>
+            <h3>Business objectives</h3>
+            <div class="tblwrap"><table>
+              <thead><tr><th>ID</th><th>Objective</th><th>Priority</th></tr></thead>
+              <tbody>
+                <tr><td class="id">OBJ-01</td><td>Reduce mean time to resolution for technical outages</td><td><span class="pill part">Must</span></td></tr>
+                <tr><td class="id">OBJ-02</td><td>Minimise manual administrator effort during investigation and remediation</td><td><span class="pill part">Must</span></td></tr>
+                <tr><td class="id">OBJ-03</td><td>Improve consistency and repeatability of diagnosis across incidents</td><td><span class="pill no">Should</span></td></tr>
+              </tbody>
+            </table></div>
+            <h3 style="margin-top:1.2em">Primary stakeholders</h3>
+            <div class="tblwrap"><table>
+              <tbody>
+                <tr><td>Sysadmins &amp; operations engineers</td><td>Faster diagnosis, clearer steps</td></tr>
+                <tr><td>Incident management leadership</td><td>Lower MTTR, SLA visibility</td></tr>
+                <tr><td>Platform / infrastructure owners</td><td>Uptime, incident insight</td></tr>
+              </tbody>
+            </table></div>
+          </div>
+          <div>
+            <h3>Success criteria</h3>
+            <div class="stack">
+              <div class="panel accent">
+                <p class="k">SC-01 &middot; Resolution time</p>
+                <p style="font-size:1.5em;font-family:var(--font-display);margin:0 0 .2em;color:var(--ink)">50% reduction</p>
+                <p style="margin:0">in average incident resolution time, measured against the tenant's pre-rollout MTTR.</p>
+              </div>
+              <div class="panel accent">
+                <p class="k">SC-02 &middot; Manual effort</p>
+                <p style="font-size:1.5em;font-family:var(--font-display);margin:0 0 .2em;color:var(--ink)">60% reduction</p>
+                <p style="margin:0">in manual investigation time per incident &mdash; the three read paths on the previous slide.</p>
+              </div>
+              <div class="panel accent">
+                <p class="k">SC-03 &middot; Runbook generation</p>
+                <p style="font-size:1.5em;font-family:var(--font-display);margin:0 0 .2em;color:var(--ink)">&lt; 5 minutes</p>
+                <p style="margin:0">from alert trigger to a generated remediation runbook. Enforced in the state
+                machine as <code>TimeoutSeconds: 300</code>, not just alarmed after the fact.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4 ................................................................ -->
+    <section class="slide" data-sect="I. The mandate" data-n="04">
+      <div class="gut">
+        <p class="eyebrow">03 &middot; Users</p>
+        <p class="trace"><span>FR-08</span><span>FR-10</span><span>NFR-04</span></p>
+        <p class="note">Roles map 1:1 onto Cognito groups in <span class="mono">template.yaml</span>.</p>
+      </div>
+      <div class="head">
+        <h2>Three roles, deliberately unequal</h2>
+        <p class="lede">
+          Every user belongs to exactly one tenant and holds exactly one role. The split is
+          not cosmetic: it is what makes the approval gate meaningful, because exactly one
+          role can authorise a change to live infrastructure.
+        </p>
+      </div>
+      <div class="body">
+        <div class="cols c3">
+          <div class="panel">
+            <p class="k">Cognito group</p>
+            <h3>TenantAdmin</h3>
+            <p>The first person to sign up from an email domain. Sees everything, manages
+            the team and integrations, and is the only role that can approve remediation.</p>
+            <ul class="tight">
+              <li>5&ndash;50 concurrent per tenant</li>
+              <li>Cannot be demoted if last remaining admin</li>
+            </ul>
+          </div>
+          <div class="panel">
+            <p class="k">Cognito group</p>
+            <h3>TenantEngineer</h3>
+            <p>Everyone who signs up afterwards. Works incidents: reads diagnoses and
+            runbooks, raises incidents by hand, and cannot approve.</p>
+            <ul class="tight">
+              <li>5&ndash;50 concurrent per tenant</li>
+              <li>Promoted to admin only by an admin</li>
+            </ul>
+          </div>
+          <div class="panel">
+            <p class="k">Cognito group</p>
+            <h3>TenantLeadership</h3>
+            <p>Accountable, not operating. Gets the cross-incident overview, the audit trail
+            and the team list &mdash; and deliberately cannot raise or approve anything.</p>
+            <ul class="tight">
+              <li>2&ndash;10 concurrent per tenant</li>
+              <li>Assigned by an admin</li>
+            </ul>
+          </div>
+        </div>
+        <div class="cols c2" style="margin-top:1.3em">
+          <div class="panel flat">
+            <p class="k">Scale the design is sized for</p>
+            <div class="tblwrap"><table>
+              <tbody>
+                <tr><td>Concurrent diagnostic sessions</td><td class="num">2&ndash;5</td><td>baseline; 10&ndash;20 during multi-tenant incidents</td></tr>
+                <tr><td>Alert volume growth</td><td class="num">+50%</td><td>over 12 months, without re-architecture</td></tr>
+              </tbody>
+            </table></div>
+          </div>
+          <div class="panel flat">
+            <p class="k">Why tenancy is not a signup field</p>
+            <p>The BRD expects OAuth/SAML per tenant. With self-signup, a writable
+            <code>custom:tenant_id</code> would let anyone claim an existing tenant's id and
+            read its incidents &mdash; and every control below that point would faithfully
+            scope access to whatever the token claimed. So tenancy is derived server-side,
+            once, from the verified email domain.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 5 ................................................................ -->
+    <section class="slide" data-sect="I. The mandate" data-n="05">
+      <div class="gut">
+        <p class="eyebrow">04 &middot; Functional scope</p>
+        <p class="trace"><span>FR-01 &rarr; FR-11</span></p>
+        <p class="note">Every row traces to a named file in the repository. Nothing here is aspirational.</p>
+      </div>
+      <div class="head">
+        <h2>Eleven requirements, and where each one lives</h2>
+      </div>
+      <div class="body">
+        <div class="tblwrap"><table>
+          <thead><tr><th>ID</th><th>Capability</th><th>Implemented by</th><th class="center">State</th></tr></thead>
+          <tbody>
+            <tr><td class="id">FR-01</td><td>Ingest alerts from an alert-management system</td><td><span class="mono">POST /v1/alerts</span> on the ingestion API &rarr; <span class="mono">fn-ingest-normalize</span></td><td class="center"><span class="pill ok">Built</span></td></tr>
+            <tr><td class="id">FR-02</td><td>Correlate the alert with logs from the log platform</td><td><span class="mono">fn-correlate-logs</span>, cached to the context-cache bucket</td><td class="center"><span class="pill ok">Built</span></td></tr>
+            <tr><td class="id">FR-03</td><td>Detect config/deploy changes preceding the outage</td><td><span class="mono">fn-correlate-config</span>, parallel branch of the same state</td><td class="center"><span class="pill ok">Built</span></td></tr>
+            <tr><td class="id">FR-04</td><td>Generate root cause analysis</td><td><span class="mono">fn-generate-rca</span> &middot; Claude Haiku 4.5, RAG-grounded</td><td class="center"><span class="pill ok">Built</span></td></tr>
+            <tr><td class="id">FR-05</td><td>Generate prioritised remediation recommendations</td><td>Same call: structured P1/P2/P3 steps with commands</td><td class="center"><span class="pill ok">Built</span></td></tr>
+            <tr><td class="id">FR-06</td><td>Generate a human-readable runbook with executable steps</td><td><span class="mono">fn-generate-runbook</span> &rarr; Markdown in the runbooks bucket</td><td class="center"><span class="pill ok">Built</span></td></tr>
+            <tr><td class="id">FR-07</td><td>Deliver the runbook within 5 minutes of the alert</td><td>State-machine <span class="mono">TimeoutSeconds: 300</span> + SLA alarms</td><td class="center"><span class="pill ok">Built</span></td></tr>
+            <tr><td class="id">FR-08</td><td>Multi-tenant isolation</td><td>Partition key + S3 prefix + STS session tag + per-tenant DEK</td><td class="center"><span class="pill ok">Built</span></td></tr>
+            <tr><td class="id">FR-09</td><td>Audit trail of executed remediation actions</td><td><span class="mono">fn-audit-write</span> &rarr; AuditTrail table, 6-month TTL</td><td class="center"><span class="pill ok">Built</span></td></tr>
+            <tr><td class="id">FR-10</td><td>View diagnostics, recommendations and runbooks via UI or API</td><td>Admin REST API + the console on CloudFront</td><td class="center"><span class="pill ok">Built</span></td></tr>
+            <tr><td class="id">FR-11</td><td>Runbook export / execution via API</td><td><span class="mono">GET /v1/runbooks/{id}/export</span>; execution gated on approval</td><td class="center"><span class="pill ok">Built</span></td></tr>
+          </tbody>
+        </table></div>
+      </div>
+    </section>
+
+    <!-- 6 ................................................................ -->
+    <section class="slide" data-sect="I. The mandate" data-n="06">
+      <div class="gut">
+        <p class="eyebrow">05 &middot; Non-functional</p>
+        <p class="trace"><span>NFR-01 &rarr; NFR-08</span></p>
+        <p class="note">A target with no mechanism is a wish. The right-hand column is the mechanism.</p>
+      </div>
+      <div class="head">
+        <h2>Eight targets, and what actually enforces them</h2>
+      </div>
+      <div class="body">
+        <div class="tblwrap"><table>
+          <thead><tr><th>ID</th><th>Requirement</th><th>Target</th><th>Enforced by</th></tr></thead>
+          <tbody>
+            <tr><td class="id">NFR-01</td><td>Runbook generation latency</td><td>&lt; 5 min</td><td>State machine <span class="mono">TimeoutSeconds: 300</span>; per-attempt timeouts sum to ~195&nbsp;s; <span class="mono">RunbookSlaAlarm</span></td></tr>
+            <tr><td class="id">NFR-02</td><td>Alert ingestion latency</td><td>&lt; 1 min</td><td>Synchronous write + EventBridge dispatch inside the request; <span class="mono">IngestionSlaAlarm</span></td></tr>
+            <tr><td class="id">NFR-03</td><td>System availability</td><td>99.5%</td><td>No VPC-bound compute; every component is an AWS-managed regional service</td></tr>
+            <tr><td class="id">NFR-04</td><td>Concurrent diagnostic sessions</td><td>20+</td><td>One Step Functions execution per alert; Lambda concurrency, not a shared worker pool</td></tr>
+            <tr><td class="id">NFR-05</td><td>Log/config query performance</td><td>&lt; 60 s</td><td>Per-attempt task timeout of 65&nbsp;s on both correlation branches, run in parallel</td></tr>
+            <tr><td class="id">NFR-06</td><td>API response time</td><td>&lt; 2 s</td><td>Single-partition DynamoDB reads; runbook bodies served as presigned S3 GETs</td></tr>
+            <tr><td class="id">NFR-07</td><td>Tenant data isolation</td><td>Zero leakage</td><td>Four independent layers &mdash; see slide 14. TLS in transit, SSE + app-layer DEK at rest</td></tr>
+            <tr><td class="id">NFR-08</td><td>Scalability</td><td>+50% in 12 mo</td><td>On-demand DynamoDB, serverless throughout; no capacity to re-plan</td></tr>
+          </tbody>
+        </table></div>
+        <div class="panel warn" style="margin-top:1.1em">
+          <p class="k">Stated honestly</p>
+          <p style="margin:0">NFR-03's 99.5% and SC-01/SC-02's reduction targets cannot be demonstrated by a
+          prototype in a hackathon window &mdash; they need production traffic and a tenant's own MTTR
+          baseline. What is demonstrable today is NFR-01, NFR-05, NFR-06 and NFR-07, all of which are
+          enforced structurally and covered by tests.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 7 ................................................................ -->
+    <section class="slide" data-sect="I. The mandate" data-n="07">
+      <div class="gut">
+        <p class="eyebrow">06 &middot; Boundaries</p>
+        <p class="trace"><span>C-01 &rarr; C-05</span><span>Out of scope</span></p>
+        <p class="note">C-03 is the constraint that shapes the product most.</p>
+      </div>
+      <div class="head">
+        <h2>Constraints that shaped the design <span class="thin">&mdash; and what was left out</span></h2>
+      </div>
+      <div class="body">
+        <div class="cols c2">
+          <div>
+            <h3>Constraints</h3>
+            <div class="tblwrap"><table>
+              <tbody>
+                <tr><td class="id">C-01</td><td><strong>Zero cross-tenant visibility.</strong> Pooled storage is allowed; leakage is not. Answered by defence in depth rather than one check.</td></tr>
+                <tr><td class="id">C-02</td><td><strong>Config data may be unavailable.</strong> A diagnosis missing change history must say so rather than imply confidence it has not earned.</td></tr>
+                <tr><td class="id">C-03</td><td><strong>Remediation is a recommendation.</strong> Human approval is required before anything executes. This is the reason the approval gate exists at all.</td></tr>
+                <tr><td class="id">C-04</td><td><strong>Correlation needs timestamp and service alignment</strong> across systems that do not agree on either.</td></tr>
+                <tr><td class="id">C-05</td><td><strong>Log query speed is the customer's.</strong> Their platform's latency and retention bound NFR-05, not ours.</td></tr>
+              </tbody>
+            </table></div>
+          </div>
+          <div>
+            <h3>Explicitly out of scope</h3>
+            <ul class="tight">
+              <li>Infrastructure provisioning or deployment orchestration</li>
+              <li>Predictive outage prevention and anomaly detection</li>
+              <li><strong>Automatic remediation with no human approval</strong> &mdash; excluded by C-03, not by effort</li>
+              <li>Integrations beyond the five named systems</li>
+              <li>SLA management, on-call scheduling, escalation workflow</li>
+              <li>Executive dashboards and post-incident trend analytics</li>
+              <li>Per-tenant custom runbook templates &mdash; standardised only</li>
+            </ul>
+            <div class="panel accent" style="margin-top:1.2em">
+              <p class="k">The consequence of C-03</p>
+              <p style="margin:0">Arcadia is not an auto-remediation system, and is not trying to be. It compresses
+              the diagnosis, then stops at a gate that exactly one human role can open. Everything
+              downstream of that gate &mdash; the platform call, the IMS update, the audit record &mdash;
+              exists to make opening it safe and reviewable.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 8 ................................................................ -->
+    <section class="slide full" data-sect="II. Architecture" data-n="08">
+      <div class="gut">
+        <p class="eyebrow">07 &middot; Write path</p>
+        <p class="trace"><span>FR-01&ndash;07</span><span>Req 1&ndash;5</span><span>NFR-02</span></p>
+      </div>
+      <div class="head">
+        <h2>The write path: alert to runbook, unattended</h2>
+      </div>
+      <div class="body">
+        <figure class="chart">
+          <svg class="dia" viewBox="0 0 1200 520" role="img" aria-label="Architecture diagram of the write path: monitoring tools post to an API-key and HMAC protected ingestion API, a normalising Lambda deduplicates and stores the alert then publishes to EventBridge, which starts a Step Functions execution whose six stages call the context cache, Bedrock, S3 Vectors, and the diagnostics and runbooks stores before publishing to SNS.">
+            <!-- row 1 -->
+            <rect class="box" x="14" y="36" width="172" height="58" rx="4"/>
+            <text class="t" x="26" y="60">Monitoring tools</text>
+            <text class="s" x="26" y="78">PagerDuty &middot; Opsgenie</text>
+            <text class="s" x="26" y="90">Prometheus AlertManager</text>
+
+            <rect class="hot" x="214" y="36" width="172" height="58" rx="4"/>
+            <text class="t" x="226" y="60">Ingestion API</text>
+            <text class="s" x="226" y="78">API key + HMAC over body</text>
+            <text class="m" x="226" y="90">POST /v1/alerts</text>
+
+            <rect class="box" x="414" y="36" width="172" height="58" rx="4"/>
+            <text class="t" x="426" y="60">fn-ingest-normalize</text>
+            <text class="s" x="426" y="78">normalise &middot; dedup &middot; 202</text>
+            <text class="s" x="426" y="90">store, then dispatch</text>
+
+            <rect class="box" x="614" y="36" width="172" height="58" rx="4"/>
+            <text class="t" x="626" y="60">EventBridge</text>
+            <text class="m" x="626" y="78">alert.received</text>
+            <text class="s" x="626" y="90">tenant_id + alert_id</text>
+
+            <rect class="store" x="814" y="36" width="172" height="58" rx="4"/>
+            <text class="t" x="826" y="60">Alert dispatch DLQ</text>
+            <text class="s" x="826" y="78">undelivered events;</text>
+            <text class="s" x="826" y="90">retry re-dispatches</text>
+
+            <line x1="186" y1="65" x2="206" y2="65"/><polygon class="ah" points="214,65 204,61 204,69"/>
+            <line x1="386" y1="65" x2="406" y2="65"/><polygon class="ah" points="414,65 404,61 404,69"/>
+            <line x1="586" y1="65" x2="606" y2="65"/><polygon class="ah" points="614,65 604,61 604,69"/>
+            <line class="dash" x1="786" y1="65" x2="806" y2="65"/><polygon class="ah" points="814,65 804,61 804,69"/>
+
+            <!-- alerts store -->
+            <rect class="store" x="414" y="112" width="172" height="44" rx="4"/>
+            <text class="t" x="426" y="132">Alerts &middot; DynamoDB</text>
+            <text class="m" x="426" y="148">pk tenant_id &middot; sk alert_id</text>
+            <line x1="500" y1="94" x2="500" y2="104"/><polygon class="ah" points="500,112 496,102 504,102"/>
+            <text class="lab" x="512" y="106">conditional write dedups</text>
+
+            <!-- state machine container -->
+            <rect class="frame" x="14" y="190" width="1172" height="112" rx="6"/>
+            <text class="cap" x="30" y="213">STEP FUNCTIONS &middot; DIAGNOSIS PIPELINE</text>
+            <text class="m" x="332" y="213">TimeoutSeconds: 300 &middot; one execution per alert</text>
+
+            <line x1="700" y1="156" x2="700" y2="182"/><polygon class="ah" points="700,190 696,180 704,180"/>
+            <text class="lab" x="712" y="176">StartExecution</text>
+
+            <rect class="chip" x="34" y="234" width="177" height="42" rx="4"/>
+            <text class="t" x="46" y="253">1 &middot; correlate logs</text>
+            <text class="m" x="46" y="268">65 s</text>
+
+            <rect class="chip" x="225" y="234" width="177" height="42" rx="4"/>
+            <text class="t" x="237" y="253">2 &middot; correlate config</text>
+            <text class="m" x="237" y="268">65 s</text>
+
+            <rect class="chip" x="416" y="234" width="177" height="42" rx="4"/>
+            <text class="t" x="428" y="253">3 &middot; RAG context</text>
+            <text class="m" x="428" y="268">25 s</text>
+
+            <rect class="chip" x="607" y="234" width="177" height="42" rx="4"/>
+            <text class="t" x="619" y="253">4 &middot; generate RCA</text>
+            <text class="m" x="619" y="268">45 s</text>
+
+            <rect class="chip" x="798" y="234" width="177" height="42" rx="4"/>
+            <text class="t" x="810" y="253">5 &middot; generate runbook</text>
+            <text class="m" x="810" y="268">45 s</text>
+
+            <rect class="chip" x="989" y="234" width="177" height="42" rx="4"/>
+            <text class="t" x="1001" y="253">6 &middot; notify</text>
+            <text class="m" x="1001" y="268">15 s</text>
+
+            <polyline points="34,228 34,222 402,222 402,228"/>
+            <text class="lab" x="218" y="217" text-anchor="middle">parallel branches &mdash; one Parallel state</text>
+
+            <!-- dependencies -->
+            <rect class="store" x="140" y="346" width="200" height="58" rx="4"/>
+            <text class="t" x="152" y="370">Context cache &middot; S3</text>
+            <text class="m" x="152" y="388">tenant/{tenant_id}/alert/&hellip;</text>
+
+            <rect class="store" x="380" y="346" width="200" height="58" rx="4"/>
+            <text class="t" x="392" y="370">Bedrock</text>
+            <text class="m" x="392" y="388">haiku-4-5 &middot; cohere embed</text>
+
+            <rect class="store" x="620" y="346" width="200" height="58" rx="4"/>
+            <text class="t" x="632" y="370">S3 Vectors index</text>
+            <text class="m" x="632" y="388">namespace per tenant</text>
+
+            <rect class="store" x="860" y="346" width="200" height="58" rx="4"/>
+            <text class="t" x="872" y="370">Diagnostics + Runbooks</text>
+            <text class="m" x="872" y="388">DynamoDB + S3 &middot; DEK</text>
+
+            <line x1="240" y1="302" x2="240" y2="338"/><polygon class="ah" points="240,346 236,336 244,336"/>
+            <line x1="480" y1="302" x2="480" y2="338"/><polygon class="ah" points="480,346 476,336 484,336"/>
+            <line x1="720" y1="302" x2="720" y2="338"/><polygon class="ah" points="720,346 716,336 724,336"/>
+            <line x1="960" y1="302" x2="960" y2="338"/><polygon class="ah" points="960,346 956,336 964,336"/>
+
+            <polyline points="1077,302 1077,428 972,428"/><polygon class="ah" points="964,428 974,424 974,432"/>
+            <rect class="box" x="764" y="452" width="200" height="52" rx="4"/>
+            <text class="t" x="776" y="474">SNS &middot; runbook ready</text>
+            <text class="s" x="776" y="491">on-call notification</text>
+            <polyline points="964,428 864,428 864,444"/><polygon class="ah" points="864,452 860,442 868,442"/>
+          </svg>
+          <figcaption>
+            Everything above is one CloudFormation stack in <span class="mono">ap-southeast-1</span>.
+            The dashed edge is the failure path: an event EventBridge cannot deliver lands on the
+            dispatch DLQ rather than being lost. The alert row is written <em>before</em> dispatch,
+            and a delivery that is stored but not dispatched is reported as a 5xx so the sender retries.
+          </figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <!-- 9 ................................................................ -->
+    <section class="slide" data-sect="II. Architecture" data-n="09">
+      <div class="gut">
+        <p class="eyebrow">08 &middot; The budget</p>
+        <p class="trace"><span>NFR-01</span><span>SC-03</span><span>Req 5.3</span></p>
+        <p class="note">The five-minute promise is the product's hardest constraint, so it is spent explicitly.</p>
+      </div>
+      <div class="head">
+        <h2>Five minutes, allocated stage by stage</h2>
+        <p class="lede">
+          A latency target that is only alarmed after the fact is a report, not a guarantee.
+          Each stage carries its own per-attempt timeout, and the state machine carries a
+          300-second ceiling that kills the execution outright.
+        </p>
+      </div>
+      <div class="body">
+        <figure class="chart">
+          <div class="axis" aria-hidden="true">
+            <span style="left:0%">0 s</span>
+            <span style="left:20%">60</span>
+            <span style="left:40%">120</span>
+            <span style="left:60%">180</span>
+            <span style="left:80%">240</span>
+            <span style="left:100%;transform:translateX(-100%)">300 s</span>
+          </div>
+          <div class="budget">
+            <i style="flex:65 0 0;background:var(--seq-1)"></i>
+            <i style="flex:25 0 0;background:var(--seq-2)"></i>
+            <i style="flex:45 0 0;background:var(--seq-3)"></i>
+            <i style="flex:45 0 0;background:var(--seq-4)"></i>
+            <i style="flex:15 0 0;background:var(--seq-5)"></i>
+            <i style="flex:105 0 0;background:var(--headroom)"></i>
+            <span class="mark195"><b>195 s expected</b></span>
+            <span class="ceiling"></span>
+          </div>
+          <div class="ticks" aria-hidden="true">
+            <i style="left:0%"></i><i style="left:20%"></i><i style="left:40%"></i>
+            <i style="left:60%"></i><i style="left:80%"></i><i style="left:100%"></i>
+          </div>
+          <p class="legend">
+            <span><b style="background:var(--seq-1)"></b>Correlate logs &amp; config (parallel)</span>
+            <span><b style="background:var(--seq-2)"></b>RAG context</span>
+            <span><b style="background:var(--seq-3)"></b>Generate RCA</span>
+            <span><b style="background:var(--seq-4)"></b>Generate runbook</span>
+            <span><b style="background:var(--seq-5)"></b>Notify</span>
+            <span><b style="background:var(--headroom)"></b>Retry headroom</span>
+          </p>
+          <figcaption>
+            Bar spans are the per-attempt task timeouts from
+            <span class="mono">statemachine/diagnosis_pipeline.asl.json</span>, laid on the
+            300-second budget the state machine enforces. The two correlation branches run
+            concurrently, so they cost 65 seconds once, not twice.
+          </figcaption>
+        </figure>
+        <div class="tblwrap" style="margin-top:1.1em"><table>
+          <thead><tr><th>Stage</th><th class="num">Timeout</th><th class="num">Retries</th><th>Bounded by</th></tr></thead>
+          <tbody>
+            <tr><td>Correlate logs + config <span style="color:var(--ink-faint)">(parallel)</span></td><td class="num">65 s</td><td class="num">1</td><td>NFR-05's 60-second query budget, plus overhead</td></tr>
+            <tr><td>RAG context</td><td class="num">25 s</td><td class="num">1</td><td>One Cohere embedding + one S3 Vectors query</td></tr>
+            <tr><td>Generate RCA</td><td class="num">45 s</td><td class="num">2</td><td>Claude Haiku 4.5 over alert + logs + config + neighbours</td></tr>
+            <tr><td>Generate runbook</td><td class="num">45 s</td><td class="num">2</td><td>Second Haiku call rendering the plan as Markdown</td></tr>
+            <tr><td>Notify</td><td class="num">15 s</td><td class="num">1</td><td>One SNS publish</td></tr>
+            <tr><td><strong>Expected total</strong></td><td class="num"><strong>195 s</strong></td><td class="num">&mdash;</td><td><strong>105 s of headroom before the 300 s ceiling</strong></td></tr>
+          </tbody>
+        </table></div>
+      </div>
+    </section>
+
+    <!-- 10 ............................................................... -->
+    <section class="slide" data-sect="II. Architecture" data-n="10">
+      <div class="gut">
+        <p class="eyebrow">09 &middot; Orchestration</p>
+        <p class="trace"><span>Req 2.1&ndash;2.3</span><span>NFR-01</span></p>
+        <p class="note"><span class="mono">diagnosis_pipeline.asl.json</span> &mdash; 10 states, one Parallel, one Fail.</p>
+      </div>
+      <div class="head">
+        <h2>What happens when a stage fails</h2>
+        <p class="lede">
+          Every stage retries with exponential backoff, then routes to a single failure path
+          that marks the alert, preserves the whole execution state, and tells ops which
+          identifiers to look at. Silence is never an outcome.
+        </p>
+      </div>
+      <div class="body">
+        <div class="cols c2">
+          <div>
+            <h3>States</h3>
+            <div class="tblwrap"><table>
+              <thead><tr><th>State</th><th>Type</th><th class="num">Timeout</th><th>On error</th></tr></thead>
+              <tbody>
+                <tr><td>CorrelateContext</td><td>Parallel</td><td class="num">65 s</td><td>Catch &rarr; MarkAlertFailed</td></tr>
+                <tr><td>MergeCorrelation</td><td>Pass</td><td class="num">&mdash;</td><td>&mdash;</td></tr>
+                <tr><td>BuildRagContext</td><td>Task</td><td class="num">25 s</td><td>Retry &times;1, then Catch</td></tr>
+                <tr><td>GenerateRca</td><td>Task</td><td class="num">45 s</td><td>Retry &times;2, then Catch</td></tr>
+                <tr><td>GenerateRunbook</td><td>Task</td><td class="num">45 s</td><td>Retry &times;2, then Catch</td></tr>
+                <tr><td>NotifyRunbookReady</td><td>Task</td><td class="num">15 s</td><td>Retry &times;1, then Catch</td></tr>
+              </tbody>
+            </table></div>
+          </div>
+          <div class="stack">
+            <div>
+              <h3>The failure path</h3>
+              <figure class="chart" style="margin:0">
+                <svg class="dia" viewBox="0 0 470 84" role="img" aria-label="Failure path: mark the alert failed, send the execution state to the pipeline failure dead-letter queue, notify the ops topic, then fail the execution.">
+                  <rect class="box" x="2" y="18" width="104" height="42" rx="4"/>
+                  <text class="t" x="14" y="38">Mark alert</text>
+                  <text class="t" x="14" y="53">failed</text>
+                  <line x1="106" y1="39" x2="118" y2="39"/><polygon class="ah" points="126,39 116,35 116,43"/>
+                  <rect class="store" x="126" y="18" width="104" height="42" rx="4"/>
+                  <text class="t" x="138" y="38">Failure DLQ</text>
+                  <text class="s" x="138" y="53">full state kept</text>
+                  <line x1="230" y1="39" x2="242" y2="39"/><polygon class="ah" points="250,39 240,35 240,43"/>
+                  <rect class="box" x="250" y="18" width="104" height="42" rx="4"/>
+                  <text class="t" x="262" y="38">Ops topic</text>
+                  <text class="s" x="262" y="53">ids published</text>
+                  <line x1="354" y1="39" x2="366" y2="39"/><polygon class="ah" points="374,39 364,35 364,43"/>
+                  <rect x="374" y="18" width="94" height="42" rx="4" style="fill:var(--bad-soft);stroke:var(--bad);stroke-width:1.6"/>
+                  <text class="t" x="386" y="38" style="fill:var(--bad)">Fail</text>
+                  <text class="s" x="386" y="53">execution ends</text>
+                </svg>
+              </figure>
+            </div>
+            <div class="panel accent">
+              <p class="k">The case a Catch cannot handle</p>
+              <p style="margin:0">An execution killed by the state machine's own 300-second timeout runs
+              <strong>no Catch at all</strong> &mdash; so <span class="mono">TIMED_OUT</span> and
+              <span class="mono">ABORTED</span> executions are picked up by a separate EventBridge rule
+              and marked failed from outside the execution. Without it, an SLA breach would leave an alert
+              sitting in <span class="mono">processing</span> forever, which reads as "still working"
+              rather than "gave up".</p>
+            </div>
+            <div class="panel flat">
+              <p class="k">Progress reporting</p>
+              <p style="margin:0">Each task marks its own stage on the alert row as its first action, so the
+              console can draw a live timeline. It is advisory by design: a failure to record progress must
+              never fail the stage that is reporting it.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 11 ............................................................... -->
+    <section class="slide" data-sect="II. Architecture" data-n="11">
+      <div class="gut">
+        <p class="eyebrow">10 &middot; Ingestion</p>
+        <p class="trace"><span>FR-01</span><span>NFR-02</span><span>Req 1.1&ndash;1.3</span></p>
+        <p class="note">Two ways in, two different trust models.</p>
+      </div>
+      <div class="head">
+        <h2>Two front doors, and why they trust different things</h2>
+      </div>
+      <div class="body">
+        <div class="cols c2">
+          <div class="panel">
+            <p class="k">Public webhook</p>
+            <h3><span class="mono">POST /v1/alerts</span> &middot; ingestion API</h3>
+            <ul class="tight">
+              <li><strong>API key</strong> on a usage plan gates the endpoint.</li>
+              <li><strong>HMAC</strong> over the raw request body, signed with that tenant's secret from Parameter Store.</li>
+              <li>Only <em>after</em> both pass is the <code>tenant_id</code> inside the payload trusted.</li>
+              <li>A signature failure writes nothing to the Alerts table.</li>
+              <li>Duplicate <code>alert_id</code> is dropped by a conditional write, not by a read-then-write race.</li>
+              <li>Returns <span class="mono">202</span> once stored and dispatched.</li>
+            </ul>
+          </div>
+          <div class="panel">
+            <p class="k">Authenticated console</p>
+            <h3><span class="mono">POST /v1/alerts</span> &middot; admin API</h3>
+            <ul class="tight">
+              <li>Takes the tenant from the <strong>authorizer context</strong> and <strong>ignores any <code>tenant_id</code> in the body</strong> &mdash; otherwise a signed-in user of one tenant could write an incident into another.</li>
+              <li>Requires the <code>create_incident</code> capability, so leadership cannot raise one.</li>
+              <li>Records <code>source: console</code> so the overview can tell hand-raised incidents from machine ones.</li>
+              <li>Everything after validation is shared with the webhook through one module, so both produce the same row and start the same pipeline.</li>
+            </ul>
+          </div>
+        </div>
+        <div class="panel accent" style="margin-top:1.2em">
+          <p class="k">Store, then dispatch &mdash; and mean it</p>
+          <p style="margin:0">
+            The alert row is written before the EventBridge dispatch. If the write succeeds and the
+            dispatch does not, the request is answered with a <strong>5xx rather than acknowledged</strong>,
+            and the sender's retry re-dispatches the stored alert instead of creating a second one.
+            Acknowledging a stored-but-undispatched alert is the failure mode that looks fine from the
+            outside and never produces a runbook &mdash; an <span class="mono">UndispatchedAlertsAlarm</span>
+            watches for it as well.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 12 ............................................................... -->
+    <section class="slide" data-sect="II. Architecture" data-n="12">
+      <div class="gut">
+        <p class="eyebrow">11 &middot; The AI layer</p>
+        <p class="trace"><span>FR-04</span><span>FR-05</span><span>FR-06</span><span>Req 4.1&ndash;4.3</span></p>
+        <p class="note">Grounding is the difference between a plausible answer and a usable one.</p>
+      </div>
+      <div class="head">
+        <h2>The model never sees the alert alone</h2>
+        <p class="lede">
+          A language model handed only "checkout-api 5xx rate above threshold" can write a
+          confident, generic, useless paragraph. Three retrieval steps run first, and the
+          diagnosis is prompted with all of them.
+        </p>
+      </div>
+      <div class="body">
+        <div class="cols c4">
+          <div class="panel flat">
+            <p class="k">Step 1 &middot; correlate</p>
+            <p style="margin:0">The tenant's log platform and VCS/deploy history are queried with the
+            tenant's own credentials, in parallel, and cached to S3 under the tenant prefix.</p>
+          </div>
+          <div class="panel flat">
+            <p class="k">Step 2 &middot; embed</p>
+            <p style="margin:0">Alert + logs + config are embedded with
+            <code>cohere.embed-multilingual-v3</code>, invoked with its bare model id directly in
+            <span class="mono">ap-southeast-1</span>.</p>
+          </div>
+          <div class="panel flat">
+            <p class="k">Step 3 &middot; retrieve</p>
+            <p style="margin:0">That vector queries the tenant's <strong>own namespace</strong> in the
+            S3 Vectors index, returning similar past incidents and how they were actually resolved.</p>
+          </div>
+          <div class="panel flat">
+            <p class="k">Step 4 &middot; generate</p>
+            <p style="margin:0">Claude Haiku 4.5 is prompted with alert, correlated signals and retrieved
+            neighbours, and returns a root-cause summary plus prioritised steps.</p>
+          </div>
+        </div>
+        <div class="cols c2" style="margin-top:1.3em">
+          <div>
+            <h3>Models, exactly as invoked</h3>
+            <div class="tblwrap"><table>
+              <thead><tr><th>Model id</th><th>Used for</th></tr></thead>
+              <tbody>
+                <tr><td class="mono" style="color:var(--accent)">global.anthropic.claude-haiku-4-5-20251001-v1:0</td><td>RCA, remediation plan, runbook drafting</td></tr>
+                <tr><td class="mono" style="color:var(--accent)">cohere.embed-multilingual-v3</td><td>Embeddings for retrieval</td></tr>
+              </tbody>
+            </table></div>
+            <p style="margin-top:.7em">The <code>global.</code> inference-profile prefix on Haiku is not
+            decoration &mdash; a bare model id fails at runtime with "on-demand throughput isn't supported",
+            inside the deployed application where it is hardest to diagnose. Cohere is the one local model
+            and takes no prefix.</p>
+          </div>
+          <div class="stack">
+            <div class="panel accent">
+              <p class="k">Output shape, not free text</p>
+              <p style="margin:0">The RCA call returns a one-sentence cause, reasoning, a confidence value,
+              a model version, and remediation steps as <code>P1</code>/<code>P2</code>/<code>P3</code> objects
+              each with text and an optional command. The console renders that structure; it does not parse prose.</p>
+            </div>
+            <div class="panel warn">
+              <p class="k">C-02, surfaced rather than hidden</p>
+              <p style="margin:0">Config history is optional &mdash; some tenants have no VCS integration.
+              A diagnosis produced without it is marked as partial-evidence and its confidence is
+              downgraded, because a diagnosis that silently omits change history implies confidence it
+              has not earned.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 13 ............................................................... -->
+    <section class="slide full" data-sect="II. Architecture" data-n="13">
+      <div class="gut">
+        <p class="eyebrow">12 &middot; Read path</p>
+        <p class="trace"><span>FR-10</span><span>FR-11</span><span>Req 6</span><span>Req 7</span></p>
+      </div>
+      <div class="head">
+        <h2>The read path: console to approval</h2>
+      </div>
+      <div class="body">
+        <figure class="chart">
+          <svg class="dia" viewBox="0 0 1200 430" role="img" aria-label="Architecture diagram of the read path: the browser loads the console from CloudFront and authenticates against Cognito directly, the admin API's request authorizer verifies the ID token against the pool's JWKS, query and remediation functions assume a tenant-scoped role with a session tag, and approving a runbook calls the remediation platform, records to the audit trail, and notifies the incident management system asynchronously.">
+            <!-- row 1 -->
+            <rect class="box" x="14" y="40" width="200" height="58" rx="4"/>
+            <text class="t" x="26" y="64">Operator browser</text>
+            <text class="s" x="26" y="82">ID token in sessionStorage,</text>
+            <text class="s" x="26" y="94">not localStorage</text>
+
+            <rect class="box" x="254" y="40" width="200" height="58" rx="4"/>
+            <text class="t" x="266" y="64">CloudFront + S3</text>
+            <text class="s" x="266" y="82">one self-contained page,</text>
+            <text class="s" x="266" y="94">served through an OAC</text>
+
+            <rect class="hot" x="494" y="40" width="200" height="58" rx="4"/>
+            <text class="t" x="506" y="64">Admin API</text>
+            <text class="s" x="506" y="82">REQUEST Lambda authorizer</text>
+            <text class="s" x="506" y="94">injects tenant_id + role</text>
+
+            <rect class="box" x="734" y="40" width="200" height="58" rx="4"/>
+            <text class="t" x="746" y="64">fn-query-diagnostics</text>
+            <text class="s" x="746" y="82">alerts &middot; diagnostics</text>
+            <text class="s" x="746" y="94">runbooks &middot; audit</text>
+
+            <rect class="store" x="974" y="40" width="200" height="58" rx="4"/>
+            <text class="t" x="986" y="64">Tenant data</text>
+            <text class="s" x="986" y="82">DynamoDB rows + S3</text>
+            <text class="s" x="986" y="94">presigned runbook GET</text>
+
+            <line x1="214" y1="69" x2="246" y2="69"/><polygon class="ah" points="254,69 244,65 244,73"/>
+            <line x1="454" y1="69" x2="486" y2="69"/><polygon class="ah" points="494,69 484,65 484,73"/>
+            <line x1="694" y1="69" x2="726" y2="69"/><polygon class="ah" points="734,69 724,65 724,73"/>
+            <line x1="934" y1="69" x2="966" y2="69"/><polygon class="ah" points="974,69 964,65 964,73"/>
+            <text class="lab" x="350" y="34" text-anchor="middle">loads index.html</text>
+            <text class="lab" x="590" y="34" text-anchor="middle">Bearer ID token</text>
+
+            <!-- row 2 -->
+            <rect class="box" x="14" y="150" width="200" height="52" rx="4"/>
+            <text class="t" x="26" y="172">Cognito user pool</text>
+            <text class="s" x="26" y="190">self-signup &middot; 3 groups &middot; MFA off</text>
+
+            <rect class="box" x="734" y="150" width="200" height="52" rx="4"/>
+            <text class="t" x="746" y="172">TenantScopedRole</text>
+            <text class="s" x="746" y="190">AssumeRole + TagSession</text>
+
+            <line x1="114" y1="150" x2="114" y2="106"/><polygon class="ah" points="114,98 110,108 118,108"/>
+            <text class="lab" x="126" y="130">InitiateAuth, direct</text>
+            <polyline class="dash" points="214,176 540,176 540,106"/><polygon class="ah" points="540,98 536,108 544,108"/>
+            <text class="lab" x="300" y="170">JWKS &middot; RS256 &middot; iss &middot; aud &middot; token_use</text>
+            <line x1="834" y1="150" x2="834" y2="106"/><polygon class="ah" points="834,98 830,108 838,108"/>
+            <text class="lab" x="846" y="130">15-min session tagged tenant_id</text>
+
+            <!-- row 3 -->
+            <rect class="hot" x="494" y="252" width="200" height="58" rx="4"/>
+            <text class="t" x="506" y="276">fn-trigger-remediation</text>
+            <text class="s" x="506" y="294">TenantAdmin only &middot; claim</text>
+
+            <rect class="box" x="734" y="252" width="200" height="58" rx="4"/>
+            <text class="t" x="746" y="276">Remediation platform</text>
+            <text class="s" x="746" y="294">outbound, guarded, https only</text>
+
+            <line x1="650" y1="98" x2="650" y2="244"/><polygon class="ah" points="650,252 646,242 654,242"/>
+            <text class="lab" x="662" y="150">POST /approve</text>
+            <line x1="694" y1="281" x2="726" y2="281"/><polygon class="ah" points="734,281 724,277 724,285"/>
+
+            <!-- row 4 -->
+            <rect class="store" x="494" y="358" width="200" height="52" rx="4"/>
+            <text class="t" x="506" y="380">Audit trail &middot; DynamoDB</text>
+            <text class="s" x="506" y="398">before and after, 6-month TTL</text>
+
+            <rect class="box" x="974" y="358" width="200" height="52" rx="4"/>
+            <text class="t" x="986" y="380">fn-notify-ims</text>
+            <text class="s" x="986" y="398">async, never blocks approval</text>
+
+            <line x1="570" y1="310" x2="570" y2="350"/><polygon class="ah" points="570,358 566,348 574,348"/>
+            <polyline class="dash" points="664,310 664,336 1074,336 1074,350"/><polygon class="ah" points="1074,358 1070,348 1078,348"/>
+          </svg>
+          <figcaption>
+            There is no hosted UI and no SDK: the page calls Cognito's <span class="mono">SignUp</span> and
+            <span class="mono">InitiateAuth</span> directly and styles the form itself. A 401 triggers one
+            silent <span class="mono">REFRESH_TOKEN_AUTH</span> and a retry before the session is treated as
+            expired. Dashed edges are best-effort paths that must never block the request they belong to.
+          </figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <!-- 14 ............................................................... -->
+    <section class="slide" data-sect="III. Isolation &amp; identity" data-n="14">
+      <div class="gut">
+        <p class="eyebrow">13 &middot; Tenant isolation</p>
+        <p class="trace"><span>FR-08</span><span>NFR-07</span><span>C-01</span><span>Req 9</span></p>
+        <p class="note">Storage is pooled. Isolation therefore has to be earned four times over.</p>
+      </div>
+      <div class="head">
+        <h2>Four independent layers, so one bug is not a breach</h2>
+        <p class="lede">
+          Tenants share tables and buckets, which is what makes the economics work &mdash; and
+          means application code is the wrong place to put the only check. Each layer below
+          holds on its own if the layer above it is wrong.
+        </p>
+      </div>
+      <div class="body">
+        <div class="tblwrap"><table>
+          <thead><tr><th>Layer</th><th>Mechanism</th><th>What it stops</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><strong>1 &middot; Data model</strong></td>
+              <td>Every DynamoDB table is partitioned by <code>tenant_id</code>; every S3 object lives under <span class="mono">tenant/{tenant_id}/</span></td>
+              <td>A query written without a tenant filter has nowhere to land &mdash; there is no table-wide read path in the handlers.</td>
+            </tr>
+            <tr>
+              <td><strong>2 &middot; IAM</strong></td>
+              <td>Every data-plane call runs under a short-lived <code>sts:AssumeRole</code> session <strong>tagged</strong> with the caller's tenant. The role's policy pins <span class="mono">dynamodb:LeadingKeys</span> and the S3 prefix to <span class="mono">${aws:PrincipalTag/tenant_id}</span></td>
+              <td>A bug in application code. The credentials <em>physically cannot</em> touch another tenant's rows or objects, whatever the code asks for.</td>
+            </tr>
+            <tr>
+              <td><strong>3 &middot; Application encryption</strong></td>
+              <td>RCA summaries, remediation steps and retrieved-incident references are Fernet-encrypted with a per-tenant DEK before they are written</td>
+              <td>A misrouted row. Pooled storage never holds another tenant's readable plaintext, even in the wrong partition.</td>
+            </tr>
+            <tr>
+              <td><strong>4 &middot; Identity</strong></td>
+              <td>The authorizer verifies the ID token's RS256 signature against the pool's JWKS and checks issuer, audience, <code>token_use</code> and expiry before reading <code>custom:tenant_id</code></td>
+              <td>A token minted by a different Cognito user pool being trusted for the tenant it claims.</td>
+            </tr>
+          </tbody>
+        </table></div>
+        <div class="cols c2" style="margin-top:1.2em">
+          <div class="panel flat">
+            <p class="k">Also scoped per tenant</p>
+            <ul class="tight">
+              <li>The <strong>S3 Vectors namespace</strong> &mdash; RAG can only retrieve this tenant's own past incidents</li>
+              <li>The <strong>ingest HMAC secret</strong>, the <strong>DEK</strong> and every <strong>integration credential</strong>, under <span class="mono">/{prefix}/tenant/{tenant_id}/</span></li>
+              <li>The stack's IAM roles trust only <span class="mono">${NamePrefix}-*</span> principals, so deploys are isolated from each other's roles as well as their data</li>
+            </ul>
+          </div>
+          <div class="panel accent">
+            <p class="k">The permission that is easy to miss</p>
+            <p style="margin:0">Passing session tags needs <code>sts:TagSession</code> as well as
+            <code>sts:AssumeRole</code> &mdash; in the caller's policy <em>and</em> in the role's trust policy.
+            Granting only AssumeRole makes every data call fail with AccessDenied, which looks like a broken
+            application rather than a missing permission.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 15 ............................................................... -->
+    <section class="slide" data-sect="III. Isolation &amp; identity" data-n="15">
+      <div class="gut">
+        <p class="eyebrow">14 &middot; Tenancy</p>
+        <p class="trace"><span>FR-08</span><span>Req 9.1</span></p>
+        <p class="note">Decided server-side, exactly once, by a Cognito trigger.</p>
+      </div>
+      <div class="head">
+        <h2>How a new user acquires a tenant</h2>
+        <p class="lede">
+          Two Cognito triggers do all of it. Nothing in the sign-up form can name a tenant or
+          ask for a role, because both are decisions the client is not allowed to make.
+        </p>
+      </div>
+      <div class="body">
+        <div class="cols c2">
+          <div class="stack">
+            <div class="panel">
+              <p class="k">PreSignUp &middot; fn-pre-signup</p>
+              <ul class="tight">
+                <li><strong>A work email is required.</strong> Consumer domains are refused, because tenancy is derived from the domain and a consumer address cannot belong to an organisation. The form checks the same list client-side so the refusal appears before submitting.</li>
+                <li>Auto-confirms the account, so signing up is one step with no emailed code.</li>
+              </ul>
+            </div>
+            <div class="panel">
+              <p class="k">PostConfirmation &middot; fn-tenant-provision</p>
+              <ul class="tight">
+                <li>Derives <code>custom:tenant_id</code> from the verified email domain and writes it to the user.</li>
+                <li>Creates the tenant's DynamoDB row and its key material: DEK, ingest HMAC secret.</li>
+                <li><strong>The first user of a domain becomes its TenantAdmin</strong>; everyone after joins as TenantEngineer.</li>
+                <li>Runs exactly once per user, ever.</li>
+              </ul>
+            </div>
+          </div>
+          <div class="stack">
+            <div class="panel accent">
+              <p class="k">Two guards worth naming</p>
+              <p style="margin:0 0 .6em">Cognito's admin APIs are account-wide, not tenant-scoped, so
+              <span class="mono">fn-team</span> adds what Cognito does not:</p>
+              <ul class="tight">
+                <li>A role change <strong>looks the target up in the caller's own tenant first</strong> and refuses if the row is not there &mdash; without it, an admin of one tenant could promote a user in another.</li>
+                <li>The <strong>last remaining admin cannot be demoted</strong>. Only the first user is ever made admin automatically, so a tenant that demoted its only one could never approve remediation again.</li>
+              </ul>
+            </div>
+            <div class="panel warn">
+              <p class="k">Known consequence, chosen knowingly</p>
+              <p style="margin:0">Because sign-up auto-confirms, the email address is never verified. Anyone
+              can sign up as <span class="mono">someone@bigcorp.com</span> and land inside BigCorp's tenant.
+              Deleting the PreSignUp trigger restores the verification step and nothing else has to change &mdash;
+              provisioning runs on confirmation either way. Acceptable for a prototype; stated rather than left implicit.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 16 ............................................................... -->
+    <section class="slide" data-sect="III. Isolation &amp; identity" data-n="16">
+      <div class="gut">
+        <p class="eyebrow">15 &middot; Authorisation</p>
+        <p class="trace"><span>FR-08</span><span>FR-10</span><span>Req 7.2</span></p>
+        <p class="note"><span class="mono">common/rbac.py</span> is the authority; the console mirrors it.</p>
+      </div>
+      <div class="head">
+        <h2>One capability matrix, checked twice</h2>
+        <p class="lede">
+          Three handlers each used to carry their own group check. Three copies of one idea
+          drift apart quietly, and the user discovers the disagreement as a 403 on a button
+          that looked enabled. There is now one matrix, and a test that fails if the
+          server's copy and the console's copy disagree.
+        </p>
+      </div>
+      <div class="body">
+        <div class="tblwrap"><table>
+          <thead><tr><th>Capability</th><th class="center">TenantAdmin</th><th class="center">TenantEngineer</th><th class="center">TenantLeadership</th></tr></thead>
+          <tbody>
+            <tr><td>View incidents, diagnoses, runbooks</td><td class="center"><span class="pill ok">yes</span></td><td class="center"><span class="pill ok">yes</span></td><td class="center"><span class="pill ok">yes</span></td></tr>
+            <tr><td>Raise an incident</td><td class="center"><span class="pill ok">yes</span></td><td class="center"><span class="pill ok">yes</span></td><td class="center"><span class="pill no">no</span></td></tr>
+            <tr><td><strong>Approve or decline remediation</strong></td><td class="center"><span class="pill ok">yes</span></td><td class="center"><span class="pill no">no</span></td><td class="center"><span class="pill no">no</span></td></tr>
+            <tr><td>Tenant overview</td><td class="center"><span class="pill ok">yes</span></td><td class="center"><span class="pill no">no</span></td><td class="center"><span class="pill ok">yes</span></td></tr>
+            <tr><td>Audit trail</td><td class="center"><span class="pill ok">yes</span></td><td class="center"><span class="pill no">no</span></td><td class="center"><span class="pill ok">yes</span></td></tr>
+            <tr><td>See the team</td><td class="center"><span class="pill ok">yes</span></td><td class="center"><span class="pill no">no</span></td><td class="center"><span class="pill ok">yes</span></td></tr>
+            <tr><td>Change a teammate's role</td><td class="center"><span class="pill ok">yes</span></td><td class="center"><span class="pill no">no</span></td><td class="center"><span class="pill no">no</span></td></tr>
+            <tr><td>View or change integrations</td><td class="center"><span class="pill ok">yes</span></td><td class="center"><span class="pill no">no</span></td><td class="center"><span class="pill no">no</span></td></tr>
+          </tbody>
+        </table></div>
+        <div class="cols c2" style="margin-top:1.1em">
+          <div class="panel flat">
+            <p class="k">Server &mdash; authorisation</p>
+            <p style="margin:0">Every capability is checked inside the handler, from the role the authorizer
+            read out of a cryptographically verified ID token. Anything the browser decides, the browser can
+            skip with the developer tools open.</p>
+          </div>
+          <div class="panel flat">
+            <p class="k">Console &mdash; presentation only</p>
+            <p style="margin:0">The mirror decides which controls render, and which render <em>disabled with an
+            explanation naming who can</em>. A non-admin should see why they cannot approve, not discover it
+            through a 403. The 403 stays implemented as the fallback for a token whose group changed between
+            page load and click.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 17 ............................................................... -->
+    <section class="slide" data-sect="IV. The product" data-n="17">
+      <div class="gut">
+        <p class="eyebrow">16 &middot; The gate</p>
+        <p class="trace"><span>FR-09</span><span>C-03</span><span>Req 7.1&ndash;7.3</span><span>Req 8</span></p>
+        <p class="note">The one surface where a UI mistake causes real damage.</p>
+      </div>
+      <div class="head">
+        <h2>Approval is a decision, not a button</h2>
+        <p class="lede">
+          Approving runs real changes on live infrastructure. Four things therefore happen
+          around the click, and each of them exists because of a specific way this can go wrong.
+        </p>
+      </div>
+      <div class="body">
+        <div class="cols c2">
+          <div>
+            <h3>What the operator sees</h3>
+            <ul class="tight">
+              <li>A warning stating plainly that this executes real changes on live infrastructure.</li>
+              <li>The exact normalised actions, their target system and their blast radius &mdash; <strong>before</strong> any button, including when an action is irreversible.</li>
+              <li>A checkbox &mdash; "I have reviewed this runbook and accept the blast radius" &mdash; that the primary button stays disabled until.</li>
+              <li>For non-admins, Approve is disabled with the reason and who <em>can</em> approve.</li>
+              <li><strong>Typed text never approves anything.</strong> "approve it", "run it", "ship it" all resolve to focusing the checkbox, and the assistant says plainly it will not approve on the user's behalf.</li>
+            </ul>
+          </div>
+          <div>
+            <h3>What the backend does</h3>
+            <ol class="tight">
+              <li><strong>Check the capability</strong> against <span class="mono">rbac.py</span>; a non-admin gets 403 and the platform is never called.</li>
+              <li><strong>Claim the approval with a conditional write</strong> before the outbound call, so a double-click or a client retry cannot execute the remediation twice.</li>
+              <li><strong>Write the audit record before and after</strong> the platform call &mdash; including refused attempts, with actor, timestamp, action, target and result.</li>
+              <li><strong>Notify the IMS asynchronously.</strong> A failure there is logged and never blocks the remediation flow.</li>
+            </ol>
+            <div class="panel accent" style="margin-top:1em">
+              <p class="k">Declining is a decision too</p>
+              <p style="margin:0">There is a real <span class="mono">POST /v1/runbooks/{id}/decline</span>.
+              A decline is recorded and audited, not a UI-only state that vanishes on reload &mdash; "we
+              looked and chose not to" is exactly the kind of thing an incident review needs to see.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 18 ............................................................... -->
+    <section class="slide" data-sect="IV. The product" data-n="18">
+      <div class="gut">
+        <p class="eyebrow">17 &middot; The console</p>
+        <p class="trace"><span>FR-10</span><span>NFR-01</span><span>NFR-06</span></p>
+        <p class="note">One self-contained page on CloudFront. No framework, no build step.</p>
+      </div>
+      <div class="head">
+        <h2>Five screens, and one that matters most</h2>
+      </div>
+      <div class="body">
+        <div class="cols c3">
+          <div class="panel"><p class="k">Screen 01</p><h3>Incidents</h3><p style="margin:0">The tenant's incidents, newest first, with severity, service and pipeline state. Everyone sees it &mdash; that is what belonging to a tenant means.</p></div>
+          <div class="panel"><p class="k">Screen 02</p><h3>New incident</h3><p style="margin:0">Raise one by hand at SEV1&ndash;SEV4. Starts the same pipeline as a webhook alert, recorded as <code>console</code>.</p></div>
+          <div class="panel"><p class="k">Screen 03</p><h3>Overview</h3><p style="margin:0">Cross-incident view for admins and leadership, joined in the browser from two endpoints that already existed &mdash; no new backend aggregation.</p></div>
+          <div class="panel"><p class="k">Screen 04</p><h3>Team</h3><p style="margin:0">Who is in the tenant and their role. The only path to TenantLeadership, and the only place a role changes.</p></div>
+          <div class="panel"><p class="k">Screen 05</p><h3>Audit trail</h3><p style="margin:0">Append-only records of executed and refused remediation, with actor, action, target and result.</p></div>
+          <div class="panel accent"><p class="k">Incident detail</p><h3>The live timeline</h3><p style="margin:0"><strong>A five-minute wait cannot be a spinner.</strong> Six named stages with glyph and state, an elapsed clock, and a budget bar against the 300-second SLA.</p></div>
+        </div>
+        <div class="cols c2" style="margin-top:1.3em">
+          <div class="panel flat">
+            <p class="k">The SLA figure is real</p>
+            <p style="margin:0">The overview's SLA number is the actual NFR-01 measurement: time from alert
+            arriving to runbook ready, against the five-minute budget. An incident with <em>no</em> runbook
+            counts as pending inside the budget and <strong>breached</strong> once past it &mdash; so a pipeline
+            that silently stopped shows up, rather than being omitted for having nothing to measure.</p>
+          </div>
+          <div class="panel flat">
+            <p class="k">How it is built</p>
+            <ul class="tight">
+              <li>One HTML file. The shared logic in <span class="mono">lib/triage.mjs</span> is inlined into it, and the deploy <strong>fails</strong> if the inlined copy has drifted.</li>
+              <li>Colour, type and spacing come from <span class="mono">design/reference.html</span>; a test compares the two token sets so they cannot silently diverge.</li>
+              <li>Tokens in <span class="mono">sessionStorage</span>, so a bearer token does not outlive the tab that obtained it.</li>
+              <li>Severity is never colour-only &mdash; every state pairs a glyph and a word with its tone.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 19 ............................................................... -->
+    <section class="slide" data-sect="IV. The product" data-n="19">
+      <div class="gut">
+        <p class="eyebrow">18 &middot; Integrations</p>
+        <p class="trace"><span>FR-02</span><span>FR-03</span><span>FR-11</span><span>Req 8</span></p>
+        <p class="note">Tenant-supplied URLs are attacker-controlled input to a function holding credentials.</p>
+      </div>
+      <div class="head">
+        <h2>Four outbound integrations, one guard</h2>
+        <p class="lede">
+          Tenants configure their own log platform, VCS, remediation platform and incident
+          management system through the API. Those URLs then reach a Lambda that holds that
+          tenant's credentials &mdash; which makes every one of them untrusted input.
+        </p>
+      </div>
+      <div class="body">
+        <div class="cols c2">
+          <div>
+            <h3>Configured by the tenant admin</h3>
+            <div class="tblwrap"><table>
+              <thead><tr><th>Integration</th><th>Direction</th><th>Used at</th></tr></thead>
+              <tbody>
+                <tr><td>Log aggregation</td><td>Pull</td><td>Correlation stage</td></tr>
+                <tr><td>VCS / deploys</td><td>Pull</td><td>Correlation stage</td></tr>
+                <tr><td>Remediation platform</td><td>Push</td><td>After approval</td></tr>
+                <tr><td>Incident management</td><td>Push</td><td>After execution, async</td></tr>
+              </tbody>
+            </table></div>
+            <p style="margin-top:.8em"><span class="mono">GET</span> /
+            <span class="mono">PUT</span> / <span class="mono">DELETE /v1/integrations</span>, restricted to
+            TenantAdmin and audited. <strong>API keys are write-only:</strong> a read returns the endpoint and
+            a boolean for whether a key is set &mdash; never the key.</p>
+          </div>
+          <div class="stack">
+            <div class="panel accent">
+              <p class="k">The guard, in two halves</p>
+              <p style="margin:0 0 .6em">Every outbound call goes through one module: <strong>https only,
+              the resolved address must be public, redirects are refused, the response is size-capped.</strong></p>
+              <ul class="tight">
+                <li><code>assert_target_shape</code> judges what a URL shows on its own &mdash; scheme, and a literal IP. This is what the settings API validates a stored endpoint against.</li>
+                <li>The <strong>full check adds resolution</strong> and runs on <em>every call</em> &mdash; because a hostname that resolves publicly at write time can be repointed afterwards.</li>
+              </ul>
+            </div>
+            <div class="panel warn">
+              <p class="k">The window that remains</p>
+              <p style="margin:0">The guard resolves a hostname and checks the address, then the HTTP client
+              resolves again. A DNS record that changes in between is not caught. Closing it means pinning the
+              checked address and carrying the hostname for TLS verification by hand &mdash; acceptable at
+              prototype scale, and documented rather than left implicit.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 20 ............................................................... -->
+    <section class="slide" data-sect="V. Delivery" data-n="20">
+      <div class="gut">
+        <p class="eyebrow">19 &middot; Inventory</p>
+        <p class="trace"><span>All FRs</span><span>Platform contract</span></p>
+        <p class="note">One SAM template, one stack, one region.</p>
+      </div>
+      <div class="head">
+        <h2>What actually gets deployed</h2>
+      </div>
+      <div class="body">
+        <div class="cols c2">
+          <div>
+            <h3>Resources</h3>
+            <div class="tblwrap"><table>
+              <thead><tr><th class="num">#</th><th>Resource</th><th>Notes</th></tr></thead>
+              <tbody>
+                <tr><td class="num">20</td><td>Lambda functions</td><td>Python 3.13, one shared layer for config, tenant-scoped clients, crypto, Bedrock, RBAC, audit</td></tr>
+                <tr><td class="num">2</td><td>REST APIs</td><td>Ingestion (API key + HMAC), admin (REQUEST authorizer)</td></tr>
+                <tr><td class="num">1</td><td>State machine</td><td>10 states, 300-second ceiling</td></tr>
+                <tr><td class="num">5</td><td>DynamoDB tables</td><td>Tenants, Alerts, Diagnostics, Runbooks, AuditTrail &mdash; all <code>tenant_id</code>-partitioned</td></tr>
+                <tr><td class="num">4</td><td>S3 buckets</td><td>Context cache, runbooks, audit exports, console &mdash; plus the S3 Vectors bucket</td></tr>
+                <tr><td class="num">3</td><td>SQS queues</td><td>Alert-dispatch DLQ, pipeline-failure DLQ, audit-write DLQ</td></tr>
+                <tr><td class="num">3</td><td>SNS topics</td><td>Runbook ready, ops alarms, vector-store setup</td></tr>
+                <tr><td class="num">6</td><td>CloudWatch alarms</td><td>Runbook SLA, SLA timeout, ingestion SLA, ingestion errors, undispatched alerts, audit-write failure</td></tr>
+                <tr><td class="num">3</td><td>IAM roles</td><td>Including <span class="mono">TenantScopedRole</span>; all carry the deploy permissions boundary</td></tr>
+                <tr><td class="num">19</td><td>Log groups</td><td>Explicit, so retention is a decision rather than a default</td></tr>
+              </tbody>
+            </table></div>
+          </div>
+          <div class="stack">
+            <div>
+              <h3>API surface</h3>
+              <ul class="tight mono" style="font-size:.76em">
+                <li>POST&nbsp;&nbsp;&nbsp;/v1/alerts &nbsp;<span style="font-family:var(--font-body);color:var(--ink-faint)">(both APIs)</span></li>
+                <li>GET&nbsp;&nbsp;&nbsp;&nbsp;/v1/alerts</li>
+                <li>GET&nbsp;&nbsp;&nbsp;&nbsp;/v1/alerts/{alertId}/status</li>
+                <li>GET&nbsp;&nbsp;&nbsp;&nbsp;/v1/diagnostics/{alertId}</li>
+                <li>GET&nbsp;&nbsp;&nbsp;&nbsp;/v1/runbooks</li>
+                <li>GET&nbsp;&nbsp;&nbsp;&nbsp;/v1/runbooks/{runbookId}</li>
+                <li>GET&nbsp;&nbsp;&nbsp;&nbsp;/v1/runbooks/{runbookId}/export</li>
+                <li>POST&nbsp;&nbsp;&nbsp;/v1/runbooks/{runbookId}/approve</li>
+                <li>POST&nbsp;&nbsp;&nbsp;/v1/runbooks/{runbookId}/decline</li>
+                <li>GET&nbsp;&nbsp;&nbsp;&nbsp;/v1/audit</li>
+                <li>GET&nbsp;&nbsp;&nbsp;&nbsp;/v1/team</li>
+                <li>POST&nbsp;&nbsp;&nbsp;/v1/team/{userSub}/role</li>
+                <li>GET&nbsp;&nbsp;&nbsp;&nbsp;/v1/integrations</li>
+                <li>PUT&nbsp;&nbsp;&nbsp;&nbsp;/v1/integrations/{integration}</li>
+                <li>DELETE&nbsp;/v1/integrations/{integration}</li>
+              </ul>
+            </div>
+            <div class="panel accent">
+              <p class="k">One name, everywhere</p>
+              <p style="margin:0">Every physical name &mdash; tables, buckets, queues, topics, functions, roles,
+              log groups, alarms, the state machine, both APIs, the user pool and every per-tenant parameter
+              path &mdash; derives from a single <code>NamePrefix</code> parameter. A test fails if any name
+              spells the prefix out instead, if the scripts and the template disagree, if the runtime constant
+              drifts (that one fails as AccessDenied at runtime, not at deploy time), or if the prefix pushes a
+              name past its AWS length limit.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 21 ............................................................... -->
+    <section class="slide" data-sect="V. Delivery" data-n="21">
+      <div class="gut">
+        <p class="eyebrow">20 &middot; Assurance</p>
+        <p class="trace"><span>Workflow step 4</span></p>
+        <p class="note">Run: <span class="mono">pytest -q</span>, <span class="mono">npm test</span>, <span class="mono">npm run check-sync</span>.</p>
+      </div>
+      <div class="head">
+        <h2>561 tests, and a deploy that refuses to ship past them</h2>
+      </div>
+      <div class="body">
+        <div class="stats" style="border-top-width:2px">
+          <div><p class="v">445</p><p class="l">Backend tests (pytest)</p></div>
+          <div><p class="v">116</p><p class="l">Console tests (node:test)</p></div>
+          <div><p class="v">33</p><p class="l">Backend test files</p></div>
+          <div><p class="v">0</p><p class="l">Failures</p></div>
+          <div><p class="v">0</p><p class="l">AWS credentials needed</p></div>
+        </div>
+        <div class="cols c2" style="margin-top:1.3em">
+          <div>
+            <h3>What the unusual tests protect</h3>
+            <div class="tblwrap"><table>
+              <tbody>
+                <tr><td class="mono" style="color:var(--accent)">test_rbac_parity</td><td>Fails if the server's capability matrix and the console's mirror disagree &mdash; the drift that shows up as a 403 on an enabled button</td></tr>
+                <tr><td class="mono" style="color:var(--accent)">test_resource_naming</td><td>Fails if any name bypasses the prefix parameter, if scripts and template disagree, or if a name exceeds its AWS length limit</td></tr>
+                <tr><td class="mono" style="color:var(--accent)">test_template_contract</td><td>Same checks against the <em>transformed</em> stack &mdash; names as CloudFormation will actually see them</td></tr>
+                <tr><td class="mono" style="color:var(--accent)">test_http_guard</td><td>Scheme, literal-IP, private-address, redirect and size-cap cases on the outbound guard</td></tr>
+                <tr><td class="mono" style="color:var(--accent)">app.test.mjs</td><td>Compares the console's tokens against <span class="mono">design/reference.html</span> so the two cannot silently diverge</td></tr>
+              </tbody>
+            </table></div>
+          </div>
+          <div>
+            <h3>What <span class="mono">./deploy.sh</span> gates on</h3>
+            <ol class="tight">
+              <li>Backend tests &mdash; a failure blocks the deploy</li>
+              <li>Console tests</li>
+              <li><strong>Inlined-library sync check</strong> &mdash; a stale copy would ship a console whose logic differs from the code just tested</li>
+              <li><span class="mono">sam build</span></li>
+              <li><strong>Verify the built layer's import root.</strong> A Python layer's modules must sit at the artifact root, because that root becomes <span class="mono">/opt/python</span> &mdash; the only directory on the layer's <span class="mono">PYTHONPATH</span>. This once came out one level too deep; build and deploy both reported success and every function then failed at import</li>
+              <li><span class="mono">sam deploy</span> against a self-managed artifacts bucket</li>
+              <li>Publish the console &mdash; <strong>a missing output is a hard failure</strong>, not a skipped step. It used to be skippable, and the deploy exited 0 having shipped an empty bucket while <code>app_url</code> returned an opaque S3 403</li>
+              <li>Kick off S3 Vectors bucket/index creation asynchronously, then write <span class="mono">outputs.json</span></li>
+            </ol>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 22 ............................................................... -->
+    <section class="slide" data-sect="V. Delivery" data-n="22">
+      <div class="gut">
+        <p class="eyebrow">21 &middot; Trade-offs</p>
+        <p class="trace"><span>Prototype scope</span></p>
+        <p class="note">Every one of these is written down in the repository, not discovered later.</p>
+      </div>
+      <div class="head">
+        <h2>Six things we chose, knowing the cost</h2>
+        <p class="lede">
+          A prototype that hides its compromises is worse than one that names them. These are
+          decisions, with the reason and the consequence stated.
+        </p>
+      </div>
+      <div class="body">
+        <div class="cols c2">
+          <div class="stack">
+            <div class="panel">
+              <p class="k">01 &middot; Key material in Parameter Store, as String</p>
+              <p style="margin:0">The deploy permissions boundary grants Secrets Manager <em>read</em> only &mdash;
+              no <code>CreateSecret</code> &mdash; so a PostConfirmation trigger could never create a tenant's DEK.
+              The same boundary grants no <code>kms:*</code>, ruling out SecureString. <strong>Cost:</strong> anyone
+              holding <code>ssm:GetParameter</code> on that path reads plaintext. One module talks to the store, so
+              moving later is one file plus IAM.</p>
+            </div>
+            <div class="panel">
+              <p class="k">02 &middot; Sign-up does not verify the email</p>
+              <p style="margin:0">One-step signup, no emailed code. <strong>Cost:</strong> anyone can claim a
+              domain's tenant. Deleting one trigger restores verification and nothing else changes.</p>
+            </div>
+            <div class="panel">
+              <p class="k">03 &middot; Runbook documents are not DEK-encrypted</p>
+              <p style="margin:0">The RCA text is; the 1&ndash;3 MB runbook restating it is SSE-S3 only, because it
+              is delivered as a presigned GET and an application-layer key makes that impossible. <strong>Boundary:</strong>
+              the tenant-prefixed IAM condition plus a fully blocked bucket.</p>
+            </div>
+          </div>
+          <div class="stack">
+            <div class="panel">
+              <p class="k">04 &middot; Client-side RBAC is presentation only</p>
+              <p style="margin:0">The console's matrix decides what renders and what renders disabled. It is not
+              authorisation &mdash; every capability is re-checked server-side, and a parity test keeps the two copies honest.</p>
+            </div>
+            <div class="panel">
+              <p class="k">05 &middot; The console is not the chat interface</p>
+              <p style="margin:0">The design spec describes a chat-first console around a <span class="mono">/v1/chat</span>
+              endpoint that does not exist. The deployed console implements the parts that run on endpoints that do; the
+              chat prototype stays in the repo as the offline design reference and is not deployed.</p>
+            </div>
+            <div class="panel">
+              <p class="k">06 &middot; A pathological retry path can breach the SLA</p>
+              <p style="margin:0">Per-attempt timeouts are sized for the expected 195 s path. If <em>every</em> stage
+              retries, the execution hits the 300 s ceiling &mdash; which is the intended behaviour for an SLA guard,
+              and is now both alarmed and recorded on the alert row rather than silent.</p>
+            </div>
+            <div class="panel flat">
+              <p class="k">And two resources deliberately idle</p>
+              <p style="margin:0">The audit-exports bucket awaits the compliance-export path; the runbook-ready topic
+              is published to but has no subscriber &mdash; a subscription is all a notification channel needs. Both are
+              named in the stack outputs.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 23 ............................................................... -->
+    <section class="slide" data-sect="V. Delivery" data-n="23">
+      <div class="gut">
+        <p class="eyebrow">22 &middot; Next</p>
+        <p class="trace"><span>Roadmap</span></p>
+      </div>
+      <div class="head">
+        <h2>What the next build picks up</h2>
+        <p class="lede">
+          Each item below is small because the surface it needs already exists &mdash; which is
+          the point of having stopped where we did.
+        </p>
+      </div>
+      <div class="body">
+        <div class="cols c2">
+          <div>
+            <div class="tblwrap"><table>
+              <thead><tr><th>Next</th><th>What it needs</th></tr></thead>
+              <tbody>
+                <tr><td><strong>The chat surface</strong></td><td>A <span class="mono">POST /v1/chat</span> handler over the five read endpoints. The design spec and the offline prototype are both already in the repo.</td></tr>
+                <tr><td><strong>Runbook-ready notifications</strong></td><td>A subscription on a topic that is already being published to.</td></tr>
+                <tr><td><strong>Compliance export</strong></td><td>A scheduled writer into a bucket that already exists, with the 6-month TTL already set on the source table.</td></tr>
+                <tr><td><strong>Verified email sign-up</strong></td><td>Delete one trigger. Provisioning runs on confirmation either way.</td></tr>
+                <tr><td><strong>SecureString key material</strong></td><td>A permissions boundary granting <code>kms:*</code>, then one module and its IAM statements.</td></tr>
+                <tr><td><strong>Evidence chips in the console</strong></td><td>The log excerpt, commit diff and similarity scores are already retrieved and cached &mdash; they are not yet surfaced per claim.</td></tr>
+              </tbody>
+            </table></div>
+          </div>
+          <div class="stack">
+            <div class="panel accent">
+              <p class="k">Where it stands today</p>
+              <p style="margin:0">All eleven functional requirements are implemented and deployed as one SAM
+              stack in <span class="mono">ap-southeast-1</span>. An alert posted to the webhook is normalised,
+              correlated, RAG-grounded, diagnosed by Claude Haiku 4.5 and rendered as an approvable runbook
+              inside a five-minute budget that the state machine enforces rather than merely measures &mdash;
+              and no step of it can read another tenant's data.</p>
+            </div>
+            <div class="panel flat">
+              <p class="k">The one claim worth repeating</p>
+              <p style="margin:0">Arcadia does not remediate. It compresses the four manual lookups on slide 2
+              into 195 seconds of machine work, and then stops at a gate that exactly one human role can open
+              &mdash; with the blast radius named before the button, and the decision recorded either way.</p>
+            </div>
+            <p style="font-family:var(--font-display);font-size:1.1em;color:var(--ink);margin:.4em 0 0">
+              A<span style="color:var(--accent)">rca</span>dia &mdash; the keystone is the root cause.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="bar botbar">
+    <button class="ctl" id="prev" type="button" aria-label="Previous slide">&larr;</button>
+    <div class="rail" id="rail" role="tablist" aria-label="Slides"></div>
+    <button class="ctl" id="next" type="button" aria-label="Next slide">&rarr;</button>
+    <span class="count"><span id="cur">1</span>&thinsp;/&thinsp;<span id="tot">23</span></span>
+  </footer>
+
+</div>
+
+<script>
+(function () {
+  var deck = document.getElementById('deck');
+  var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
+  var rail = document.getElementById('rail');
+  var curEl = document.getElementById('cur');
+  var totEl = document.getElementById('tot');
+  var sectEl = document.getElementById('sect');
+  var modeBtn = document.getElementById('modeBtn');
+  var i = 0;
+  var outline = false;
+
+  totEl.textContent = String(slides.length);
+
+  slides.forEach(function (s, n) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.setAttribute('role', 'tab');
+    b.setAttribute('aria-label', 'Slide ' + (n + 1) + ': ' + (s.dataset.sect || ''));
+    b.addEventListener('click', function () { go(n); });
+    rail.appendChild(b);
+  });
+  var dots = Array.prototype.slice.call(rail.children);
+
+  function paint() {
+    slides.forEach(function (s, n) { s.hidden = outline ? false : n !== i; });
+    dots.forEach(function (d, n) { d.setAttribute('aria-current', n === i ? 'true' : 'false'); });
+    curEl.textContent = String(i + 1);
+    sectEl.textContent = slides[i].dataset.sect || '';
+  }
+
+  function go(n) {
+    i = Math.max(0, Math.min(slides.length - 1, n));
+    paint();
+    if (outline) slides[i].scrollIntoView({ block: 'start', behavior: 'smooth' });
+  }
+
+  function setMode(on) {
+    outline = on;
+    deck.dataset.mode = on ? 'outline' : 'deck';
+    modeBtn.textContent = on ? 'Deck view' : 'Outline view';
+    modeBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    paint();
+    if (on) slides[i].scrollIntoView({ block: 'start' });
+  }
+
+  document.getElementById('prev').addEventListener('click', function () { go(i - 1); });
+  document.getElementById('next').addEventListener('click', function () { go(i + 1); });
+  modeBtn.addEventListener('click', function () { setMode(!outline); });
+
+  document.addEventListener('keydown', function (e) {
+    var t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
+    switch (e.key) {
+      case 'ArrowRight': case 'PageDown': case ' ': go(i + 1); e.preventDefault(); break;
+      case 'ArrowLeft': case 'PageUp': go(i - 1); e.preventDefault(); break;
+      case 'Home': go(0); e.preventDefault(); break;
+      case 'End': go(slides.length - 1); e.preventDefault(); break;
+      case 'o': case 'O': setMode(!outline); e.preventDefault(); break;
+    }
+  });
+
+  paint();
+})();
+</script>

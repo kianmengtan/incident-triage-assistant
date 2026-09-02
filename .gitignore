@@ -14,3 +14,6 @@ outputs.json
 # well as in any developer's global ignore file, because the platform's build step
 # runs `git add -A` and a machine without that global rule would commit it.
 .claude/settings.local.json
+# macOS Finder metadata. Same reasoning as above: the build step runs `git add -A`,
+# so a developer on a Mac without a global rule would commit it.
+.DS_Store
