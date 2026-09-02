@@ -723,3 +723,36 @@ def test_the_provisioning_trigger_may_write_the_key_material_it_creates(stack):
         "fn-tenant-provision cannot create a tenant's DEK, so every signup "
         f"leaves the user without custom:tenant_id; it has {sorted(allowed)}"
     )
+
+
+def test_the_authorizer_is_a_request_authorizer_that_receives_the_headers(stack):
+    """src/handlers/authorizer.py reads event["headers"], which only a REQUEST
+    authorizer is given. SAM defaults FunctionPayloadType to TOKEN, and the
+    resulting authorizer passed {"authorizationToken": ...} with no headers at all
+    -- so the handler saw no token, denied every authenticated request, and the
+    console showed API Gateway's "not authorized to access this resource with an
+    explicit deny" page on every call. Nothing in the handler's own tests could see
+    it: they build the event themselves.
+
+    SAM emits this inside the API's OpenAPI body rather than as its own resource,
+    which is why it is read from securityDefinitions.
+    """
+    found = {}
+    for name, resource in stack["Resources"].items():
+        if resource["Type"] != "AWS::ApiGateway::RestApi":
+            continue
+        body = resource["Properties"].get("Body") or {}
+        for scheme, definition in (body.get("securityDefinitions") or {}).items():
+            spec = definition.get("x-amazon-apigateway-authorizer")
+            if spec:
+                found[f"{name}.{scheme}"] = spec
+
+    assert found, "no Lambda authorizer is declared on any API"
+    for name, spec in sorted(found.items()):
+        assert spec.get("type") == "request", (
+            f"{name} is a '{spec.get('type')}' authorizer; the handler reads "
+            "event['headers'], which only a request authorizer provides"
+        )
+        assert spec.get("identitySource") == "method.request.header.Authorization", (
+            f"{name} does not key off the Authorization header: {spec.get('identitySource')}"
+        )

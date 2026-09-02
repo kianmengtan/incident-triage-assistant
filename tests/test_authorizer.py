@@ -192,3 +192,40 @@ def test_an_unknown_kid_triggers_exactly_one_refresh():
     with patch.object(jwt, "_fetch_jwks", return_value=_jwks(kid="rotated")) as fetch:
         assert _effect(authorizer.handler(_event(_token(kid="unknown")), None)) == "Deny"
     assert fetch.call_count == 1
+
+
+# ------------------------------------------------- both authorizer payload shapes
+
+def _token_type_event(token):
+    """What a TOKEN authorizer is handed: no headers, just the raw header value."""
+    return {
+        "type": "TOKEN",
+        "methodArn": "arn:aws:execute-api:ap-southeast-1:1:api/prod/GET/v1/runbooks",
+        "authorizationToken": f"Bearer {token}",
+    }
+
+
+def test_a_token_type_payload_is_still_understood():
+    """The outage this guards: SAM defaults FunctionPayloadType to TOKEN, so the
+    deployed authorizer received no "headers" key, read no token, and denied every
+    authenticated request with API Gateway's "explicit deny" page."""
+    resp = authorizer.handler(_token_type_event(_token()), None)
+
+    assert _effect(resp) == "Allow"
+    assert resp["context"] == {"tenant_id": "acme", "group": "TenantAdmin"}
+
+
+def test_a_token_type_payload_without_the_bearer_prefix_is_understood():
+    event = _token_type_event(_token())
+    event["authorizationToken"] = event["authorizationToken"][7:]
+
+    assert _effect(authorizer.handler(event, None)) == "Allow"
+
+
+def test_an_empty_payload_of_either_shape_is_denied():
+    for event in (
+        {"methodArn": "arn:aws:execute-api:ap-southeast-1:1:api/prod/GET/v1/runbooks"},
+        _token_type_event(""),
+        _event(""),
+    ):
+        assert _effect(authorizer.handler(event, None)) == "Deny"

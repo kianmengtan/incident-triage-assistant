@@ -19,11 +19,23 @@ logger.setLevel(logging.INFO)
 
 
 def _extract_token(event):
+    """The bearer token, from either authorizer payload shape.
+
+    A REQUEST authorizer is handed the whole request, so the token is in
+    ``headers``. A TOKEN authorizer is handed only ``authorizationToken`` and no
+    ``headers`` key at all. The template asks for REQUEST, which is what the rest
+    of this module is written around -- but reading both matters, because SAM's
+    FunctionPayloadType defaults to TOKEN: when it was left unset this function
+    found no ``headers``, concluded every caller had presented no token, and the
+    API answered every authenticated request with API Gateway's "not authorized
+    to access this resource with an explicit deny" page. Accepting both shapes
+    means that one missing property cannot take the whole API down again.
+    """
     headers = {k.lower(): v for k, v in (event.get("headers") or {}).items()}
-    auth_header = headers.get("authorization", "")
-    if auth_header.lower().startswith("bearer "):
-        return auth_header[7:].strip()
-    return auth_header.strip()
+    raw = (headers.get("authorization") or event.get("authorizationToken") or "").strip()
+    if raw.lower().startswith("bearer "):
+        return raw[7:].strip()
+    return raw
 
 
 def _policy(principal_id, effect, resource, context=None):

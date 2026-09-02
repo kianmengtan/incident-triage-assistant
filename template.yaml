@@ -1121,6 +1121,12 @@ Resources:
         Authorizers:
           TenantAuthorizer:
             FunctionArn: !GetAtt AuthorizerFunction.Arn
+            # REQUEST, explicitly. SAM defaults FunctionPayloadType to TOKEN, and a
+            # TOKEN authorizer is invoked with {"authorizationToken": ...} and no
+            # "headers" key -- so the handler saw no token on every call and the API
+            # denied every authenticated request. Identity.Headers (plural) is also
+            # the REQUEST spelling; under TOKEN it is silently the wrong shape.
+            FunctionPayloadType: REQUEST
             Identity:
               Headers:
                 - Authorization
