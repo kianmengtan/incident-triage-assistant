@@ -225,3 +225,43 @@ test('the logo is inline SVG drawn from tokens, not an image request', () => {
     assert.match(mark, /aria-hidden="true"/, 'decorative beside the wordmark, so hidden from AT');
   }
 });
+
+test('the no-tenant screen distinguishes a bad address from unfinished setup', () => {
+  /* Both causes used to render one message: "no organisation could be derived
+   * from its email domain -- sign up again with your work email address". While
+   * the provisioning trigger was denied secretsmanager:CreateSecret, that was
+   * false for a perfectly good work address, and following it returned
+   * UsernameExistsException and then a failed sign-in with the just-typed
+   * password. The screen has to name the cause it actually has. */
+  assert.match(app, /function describeMissingTenant\(\)/);
+  assert.match(
+    app,
+    /describeMissingTenant\(\);\s*\n\s*\$\('authView'\)\.hidden = true;/,
+    'enterApp must set the explanation before revealing the no-tenant view'
+  );
+
+  /* The branch is the whole point: signupEmailProblem already knows whether an
+   * address can yield a tenant, so the two cases must not share one message. */
+  const fn = app.slice(
+    app.indexOf('function describeMissingTenant()'),
+    app.indexOf('function enterApp()')
+  );
+  assert.match(fn, /if \(signupEmailProblem\(session\.email\)\)/);
+  assert.match(fn, /Sign up again with your work email address\./,
+    'an address that cannot yield an organisation should still be told to re-register');
+  assert.match(fn, /Signing up again will not help/,
+    'a usable address must not be told to sign up again');
+});
+
+test('the no-tenant copy is filled from script, not hardcoded in the markup', () => {
+  /* A literal sentence left in the HTML would show for both causes before the
+   * script corrected it, which is the bug this pair of tests exists to stop. */
+  const view = app.slice(
+    app.indexOf('id="noTenantView"'),
+    app.indexOf('id="appView"')
+  );
+  assert.match(view, /<p class="meta"[^>]*id="noTenantWhy"><\/p>/);
+  assert.match(view, /<p class="meta" id="noTenantNext"><\/p>/);
+  assert.doesNotMatch(view, /derived from its email/,
+    'the explanation must come from describeMissingTenant, not the markup');
+});

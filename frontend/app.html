@@ -349,12 +349,9 @@ code {
 <!-- ===================== no organisation ====================== -->
 <div class="auth-wrap" id="noTenantView" hidden>
   <div class="auth-card card">
-    <h2>We could not determine your organisation</h2>
-    <p class="meta" style="margin-top:var(--space-2)">
-      Your account was created, but no organisation could be derived from its email
-      domain, so there is nothing it can be given access to.
-    </p>
-    <p class="meta">Sign up again with your work email address.</p>
+    <h2 id="noTenantTitle">We could not determine your organisation</h2>
+    <p class="meta" style="margin-top:var(--space-2)" id="noTenantWhy"></p>
+    <p class="meta" id="noTenantNext"></p>
     <button class="btn btn-quiet" id="noTenantSignOut">Back to sign in</button>
   </div>
 </div>
@@ -1192,10 +1189,38 @@ function allowedViews() {
   return VIEWS.filter(function (v) { return can(session.role, v.capability); });
 }
 
+/* Which of the two causes of an empty tenant this is, and what to do about it.
+ *
+ * Getting this wrong is expensive. The screen used to say "no organisation could
+ * be derived from its email domain -- sign up again with your work email address"
+ * for both causes. While the provisioning trigger was failing, that advice was
+ * false and actively harmful for a perfectly good work address: signing up again
+ * returns UsernameExistsException, and the sign-in that follows uses the password
+ * just typed rather than the account's real one, so that fails too. The account
+ * looks unusable and the real cause -- provisioning never completed -- is never
+ * mentioned. */
+function describeMissingTenant() {
+  if (signupEmailProblem(session.email)) {
+    $('noTenantTitle').textContent = 'We could not determine your organisation';
+    $('noTenantWhy').textContent = 'Your account was created, but no organisation ' +
+      'could be derived from its email address, so there is nothing it can be given ' +
+      'access to.';
+    $('noTenantNext').textContent = 'Sign up again with your work email address.';
+    return;
+  }
+  $('noTenantTitle').textContent = 'Your account is not finished being set up';
+  $('noTenantWhy').textContent = 'Your organisation could not be attached to this ' +
+    'account, so it has no access yet. The email address itself is fine.';
+  $('noTenantNext').textContent = 'Signing up again will not help \u2014 this address ' +
+    'is already registered. Ask an administrator to finish setting up the account, ' +
+    'then sign in again.';
+}
+
 function enterApp() {
   if (!session.tenantId) {
     /* Fail closed and say so. The authorizer denies every request from a token
        with no tenant, so an app shell here would be a screen of failures. */
+    describeMissingTenant();
     $('authView').hidden = true;
     $('noTenantView').hidden = false;
     return;
