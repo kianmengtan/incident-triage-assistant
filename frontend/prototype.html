@@ -696,10 +696,22 @@ function extractIds(text) {
 
 /* Intent routing.
  *
- * In production this is Bedrock tool-use inside fn-chat; here it stands in for
- * the model and also drives the prototype. `approve` is deliberately NOT an
- * executable intent: it resolves to `focus_approval`, which scrolls to the
- * approval card and focuses it. Typed text never triggers remediation. */
+ * Two jobs, in two different pages. In prototype.html this stands in for the
+ * model and drives the whole scripted scenario. In app.html it is the live
+ * client-side guard that runs BEFORE anything is sent to POST /v1/chat, where
+ * fn-chat does the real Bedrock tool-use.
+ *
+ * `approve` is deliberately NOT an executable intent: it resolves to
+ * `focus_approval`, which scrolls to the approval card and focuses it. Typed
+ * text never triggers remediation.
+ *
+ * That property is enforced three times, because a remediation running on live
+ * infrastructure that nobody chose is the worst thing this product could do:
+ * here, again in fn-chat before it invokes the model, and finally in fn-chat's
+ * tool list, which contains no mutation for a model to reach. The two phrase
+ * lists are pinned together by tests/test_chat_parity.py -- if this one learns
+ * a new way of saying "approve" and the server's does not, the two surfaces
+ * stop agreeing about what counts as a command. */
 function routeIntent(text) {
   var raw = String(text == null ? '' : text).trim();
   var q = raw.toLowerCase();
@@ -1061,11 +1073,12 @@ function median(values) {
    Prototype application.
 
    Everything below is presentation plus a scripted scenario engine over
-   mock data. There are no network calls: in production each card is fed by
-   the endpoints in spec/design.md (POST /v1/chat for the conversation,
-   GET /v1/diagnostics/{alertId}, GET /v1/runbooks/{runbookId},
-   POST /v1/runbooks/{runbookId}/approve), and the pipeline card is driven
-   by the Step Functions execution state.
+   mock data. There are no network calls. The live equivalents are in
+   template.yaml on AdminApi -- POST /v1/chat for the conversation (served by
+   fn-chat), GET /v1/diagnostics/{alertId}, GET /v1/runbooks/{runbookId} and
+   POST /v1/runbooks/{runbookId}/approve -- and the pipeline card is driven by
+   the Step Functions execution state. app.html, not this file, is what
+   deploy.sh publishes.
    ============================================================ */
 
 var params = new URLSearchParams(location.search);

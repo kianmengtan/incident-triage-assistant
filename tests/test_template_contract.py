@@ -173,7 +173,7 @@ def _dispatched_resources(module):
 
 @pytest.mark.parametrize(
     "module, method",
-    [("query_diagnostics", "get")],
+    [("query_diagnostics", "get"), ("chat", "post")],
 )
 def test_every_route_a_handler_serves_is_exposed_by_an_api(stack, module, method):
     """Three routes used to be implemented, documented, and unreachable.
@@ -231,7 +231,17 @@ def test_cors_allows_every_method_the_admin_api_actually_serves(stack):
 # IAM: what the code needs vs what the generated roles allow
 # ---------------------------------------------------------------------------
 def _module_imports():
-    """module -> the common.* modules it imports directly."""
+    """module -> the modules it imports directly, common.* and sibling handlers.
+
+    Sibling handlers count because they are all packaged from one CodeUri, so
+    `import query_diagnostics` really does put that module's dependencies in the
+    importing function's runtime. fn-chat reuses the readers in
+    fn-query-diagnostics rather than reimplementing them, which means it reaches
+    common.tenant_scope transitively and needs the same sts grant -- a graph
+    that only followed common.* imports would have declared it exempt and let
+    the deploy ship a function that fails on its first tool call.
+    """
+    handlers = {path.stem for path in HANDLERS.glob("*.py")}
     graph = {}
     for path in list(HANDLERS.glob("*.py")) + list(COMMON.glob("*.py")):
         key = path.stem if path.parent == HANDLERS else f"common.{path.stem}"
@@ -245,6 +255,9 @@ def _module_imports():
                 elif node.level == 1 and node.module is None:
                     # `from . import config, tenant_scope` inside common/
                     imported.update(f"common.{a.name}" for a in node.names)
+            elif isinstance(node, ast.Import):
+                # `import query_diagnostics as reads`
+                imported.update(a.name for a in node.names if a.name in handlers)
         graph[key] = imported
     return graph
 
@@ -287,12 +300,35 @@ def _actions(statement):
     return set(action if isinstance(action, list) else [action])
 
 
+#: The two tenant-scoped roles a function may assume. Both pin DynamoDB access
+#: to dynamodb:LeadingKeys = the session's tenant_id tag and S3 access to that
+#: tenant's object prefix; TenantScopedReadRole additionally has no write.
+TENANT_SCOPED_ROLES = ("TenantScopedRole", "TenantScopedReadRole")
+
+
+def _assumable_roles(stack, role):
+    """tenant-scoped role logical id -> the sts actions this function holds on it."""
+    held = {}
+    for statement in _role_statements(stack, role):
+        resource = json.dumps(statement.get("Resource"))
+        for candidate in TENANT_SCOPED_ROLES:
+            # Exact-ish: "TenantScopedRole" is a substring of nothing else here,
+            # but check the longer name first so it is not mistaken for the other.
+            if f'"{candidate}"' in resource or f"{candidate}.Arn" in resource:
+                held.setdefault(candidate, set()).update(_actions(statement))
+    return held
+
+
 def test_every_function_that_can_reach_tenant_scope_may_assume_the_role(stack):
     """common.progress reaches tenant_scope, and it is imported transitively.
 
     fn-notify had sns:Publish only, so its progress.mark_stage call failed on
     every invocation. mark_stage swallows failures by design, so the last stage
     of the pipeline simply never appeared in the timeline and nothing said why.
+
+    Either tenant-scoped role satisfies this: fn-chat assumes the read-only one,
+    and which of the two a function is entitled to is a separate assertion
+    below.
     """
     graph = _module_imports()
     missing = []
@@ -302,16 +338,112 @@ def test_every_function_that_can_reach_tenant_scope_may_assume_the_role(stack):
         if not _reaches(graph, module, "common.tenant_scope"):
             continue
         allowed = set()
-        for statement in _role_statements(stack, role):
-            if "TenantScopedRole" in json.dumps(statement.get("Resource")):
-                allowed |= _actions(statement)
+        for actions in _assumable_roles(stack, role).values():
+            allowed |= actions
         if not {"sts:AssumeRole", "sts:TagSession"} <= allowed:
             missing.append(f"{function} ({module}) has {sorted(allowed) or 'nothing'}")
 
     assert not missing, (
         "functions reaching common.tenant_scope without sts:AssumeRole + "
-        "sts:TagSession on TenantScopedRole: " + "; ".join(missing)
+        "sts:TagSession on a tenant-scoped role: " + "; ".join(missing)
     )
+
+
+def _function_env(stack, function):
+    return (
+        stack["Resources"][function]["Properties"]
+        .get("Environment", {})
+        .get("Variables", {})
+    )
+
+
+def test_each_function_may_assume_the_tenant_role_it_is_configured_to_use(stack):
+    """TENANT_SCOPED_ROLE_ARN and the sts grant must name the SAME role.
+
+    common.tenant_scope assumes whatever the env var names, so a function granted
+    sts:AssumeRole on one role and pointed at the other fails with AccessDenied on
+    its first data-plane call -- after a successful deploy, at runtime, looking
+    like a broken feature rather than a mismatched pair of template edits.
+    """
+    graph = _module_imports()
+    mismatched = []
+    for function, (module, role) in sorted(_lambda_functions(stack).items()):
+        if module not in graph or not _reaches(graph, module, "common.tenant_scope"):
+            continue
+        configured = json.dumps(_function_env(stack, function).get("TENANT_SCOPED_ROLE_ARN"))
+        named = [r for r in TENANT_SCOPED_ROLES if f"{r}.Arn" in configured or f'"{r}"' in configured]
+        assert named, f"{function} reaches tenant_scope with no TENANT_SCOPED_ROLE_ARN"
+        held = _assumable_roles(stack, role)
+        for candidate in named:
+            if {"sts:AssumeRole", "sts:TagSession"} > held.get(candidate, set()):
+                mismatched.append(
+                    f"{function} is configured for {candidate} but may not assume it"
+                )
+
+    assert not mismatched, "; ".join(mismatched)
+
+
+def test_the_read_only_tenant_role_can_only_read(stack):
+    """fn-chat is the one function whose actions a language model chooses.
+
+    Its tool list contains no mutation and tests/test_chat.py asserts that, but a
+    tool list is application code. This role is what makes a mutating tool added
+    by mistake fail with AccessDenied instead of succeeding, so it must stay free
+    of writes.
+    """
+    statements = _role_statements(stack, "TenantScopedReadRole")
+    assert statements, "TenantScopedReadRole has no policy"
+
+    actions = set()
+    for statement in statements:
+        assert statement["Effect"] == "Allow"
+        actions |= _actions(statement)
+
+    forbidden = sorted(
+        action
+        for action in actions
+        if any(
+            word in action.lower()
+            for word in ("put", "update", "delete", "create", "write", "batchwrite", "*")
+        )
+    )
+    assert not forbidden, f"TenantScopedReadRole grants writes: {forbidden}"
+    assert actions <= {"dynamodb:GetItem", "dynamodb:Query", "s3:GetObject"}, sorted(actions)
+
+
+def test_the_read_only_role_keeps_the_same_tenant_isolation(stack):
+    """Read-only is not the interesting property on its own -- a role that could
+    read every tenant's rows would be worse than the read/write one it replaces.
+    """
+    statements = _role_statements(stack, "TenantScopedReadRole")
+
+    dynamo = [s for s in statements if "dynamodb:Query" in _actions(s)]
+    assert dynamo, "no DynamoDB statement"
+    for statement in dynamo:
+        condition = json.dumps(statement.get("Condition"))
+        assert "dynamodb:LeadingKeys" in condition
+        assert "aws:PrincipalTag/tenant_id" in condition
+
+    s3 = [s for s in statements if "s3:GetObject" in _actions(s)]
+    assert s3, "no S3 statement"
+    for statement in s3:
+        resource = json.dumps(statement.get("Resource"))
+        assert "aws:PrincipalTag/tenant_id" in resource, (
+            "read access to S3 must still be confined to the tenant's own prefix"
+        )
+
+
+def test_the_chat_function_is_the_one_using_the_read_only_role(stack):
+    """Stated as a fact about the stack so that pointing another function at it,
+    or moving fn-chat back to the read/write role, is a deliberate edit here."""
+    users = sorted(
+        function
+        for function in _lambda_functions(stack)
+        if "TenantScopedReadRole" in json.dumps(
+            _function_env(stack, function).get("TENANT_SCOPED_ROLE_ARN")
+        )
+    )
+    assert users == ["ChatFunction"], users
 
 
 def _queried_indexes():

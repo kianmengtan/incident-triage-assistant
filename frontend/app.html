@@ -281,6 +281,48 @@ code {
 .steps { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--space-3); }
 .steps li { display: grid; gap: var(--space-1); }
 
+/* ---------- ask (the conversational surface) ----------
+   Every colour is a token: design/README.md rules out adjacent shades, and
+   frontend/test/app.test.mjs fails on a literal hex outside :root. */
+.transcript {
+  display: grid; gap: var(--space-3); margin-bottom: var(--space-4);
+}
+.turn { display: grid; gap: var(--space-1); max-width: 62ch; }
+.turn[data-who="you"] { justify-items: end; margin-inline-start: auto; }
+.turn .who {
+  font-size: var(--text-sm); color: var(--color-ink-faint); text-transform: lowercase;
+}
+.bubble {
+  padding: var(--space-3) var(--space-4); border-radius: var(--radius);
+  border: 1px solid var(--color-border); background: var(--color-surface);
+  line-height: var(--leading-body);
+}
+.turn[data-who="you"] .bubble {
+  background: var(--color-accent-soft); border-color: var(--color-accent-soft);
+}
+.turn[data-who="assistant"] .bubble { background: var(--color-raised); }
+/* A refusal is not an error: it is the assistant declining to act, which is the
+   product working as designed. Warning tone, never danger. */
+.turn[data-who="assistant"][data-refused="true"] .bubble {
+  background: var(--color-warning-soft); border-color: var(--color-warning-soft);
+}
+.bubble p { margin: 0 0 var(--space-2); }
+.bubble p:last-child { margin-bottom: 0; }
+.tools { display: flex; flex-wrap: wrap; gap: var(--space-1); }
+.tool-chip {
+  display: inline-flex; align-items: center; gap: var(--space-1);
+  font-size: var(--text-sm); color: var(--color-ink-muted);
+  background: var(--color-surface); border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill); padding: 0 var(--space-2);
+}
+.composer { display: flex; gap: var(--space-2); align-items: flex-end; }
+.composer textarea {
+  flex: 1; min-height: 48px; max-height: 160px; resize: vertical;
+  font-family: var(--font-body); font-size: var(--text-base);
+}
+.ask-hint { font-size: var(--text-sm); color: var(--color-ink-faint); margin-top: var(--space-2); }
+.ask-examples { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-3); }
+
 /* ---------- toast ---------- */
 #toast {
   position: fixed; inset-block-end: var(--space-4); inset-inline: 0;
@@ -556,10 +598,22 @@ function extractIds(text) {
 
 /* Intent routing.
  *
- * In production this is Bedrock tool-use inside fn-chat; here it stands in for
- * the model and also drives the prototype. `approve` is deliberately NOT an
- * executable intent: it resolves to `focus_approval`, which scrolls to the
- * approval card and focuses it. Typed text never triggers remediation. */
+ * Two jobs, in two different pages. In prototype.html this stands in for the
+ * model and drives the whole scripted scenario. In app.html it is the live
+ * client-side guard that runs BEFORE anything is sent to POST /v1/chat, where
+ * fn-chat does the real Bedrock tool-use.
+ *
+ * `approve` is deliberately NOT an executable intent: it resolves to
+ * `focus_approval`, which scrolls to the approval card and focuses it. Typed
+ * text never triggers remediation.
+ *
+ * That property is enforced three times, because a remediation running on live
+ * infrastructure that nobody chose is the worst thing this product could do:
+ * here, again in fn-chat before it invokes the model, and finally in fn-chat's
+ * tool list, which contains no mutation for a model to reach. The two phrase
+ * lists are pinned together by tests/test_chat_parity.py -- if this one learns
+ * a new way of saying "approve" and the server's does not, the two surfaces
+ * stop agreeing about what counts as a command. */
 function routeIntent(text) {
   var raw = String(text == null ? '' : text).trim();
   var q = raw.toLowerCase();
@@ -1175,7 +1229,14 @@ function signOutNow(message) {
 
 /* ---------- shell ---------- */
 
+/* Ask leads the nav and is the landing view. design/frontend-design.md argues
+   for a chat-primary console with the incident work alongside it rather than
+   replaced by it, which is what this ordering gives: the conversation is the
+   front door, every structured view is one tab away, and approval stays on the
+   incident's own card where the blast-radius warning and the acknowledgement
+   checkbox live. */
 var VIEWS = [
+  { id: 'ask',       label: 'Ask',          capability: 'view_incidents' },
   { id: 'incidents', label: 'Incidents',    capability: 'view_incidents' },
   { id: 'new',       label: 'New incident', capability: 'create_incident' },
   { id: 'overview',  label: 'Overview',     capability: 'view_overview' },
@@ -1183,7 +1244,7 @@ var VIEWS = [
   { id: 'audit',     label: 'Audit',        capability: 'view_audit' }
 ];
 
-var current = 'incidents';
+var current = 'ask';
 
 function allowedViews() {
   return VIEWS.filter(function (v) { return can(session.role, v.capability); });
@@ -1265,7 +1326,10 @@ function show(id) {
     return;
   }
 
-  ({
+  /* Returned, not discarded: openApproval has to wait for the incidents view to
+     finish loading before it can open one incident's detail inside it. */
+  return ({
+    ask: renderAsk,
     incidents: renderIncidents,
     new: renderNewIncident,
     overview: renderOverview,
@@ -1279,6 +1343,243 @@ function failure(host, err) {
     escapeHtml(err.message || 'Could not load this view') + '</div></div>';
 }
 
+/* ---------- ask ----------
+ *
+ * The conversational surface. It sends a question to POST /v1/chat, where
+ * fn-chat answers it with read-only tools, and renders the reply plus which
+ * tools were used.
+ *
+ * The one rule that matters here: typing an approval never approves anything.
+ * That is enforced three times over, deliberately, because the cost of getting
+ * it wrong is a remediation running on live infrastructure that nobody chose:
+ *
+ *   1. here, before any request is made -- routeIntent resolves approval
+ *      phrasing to focus_approval, so the text is answered locally and the
+ *      approval card is opened for a human to act on;
+ *   2. in fn-chat, which intercepts the same phrases before it invokes the
+ *      model, for any client that is not this page (curl, a future mobile app);
+ *   3. in the tool list itself, which contains no mutation at all, so even a
+ *      model that decided to approve has nothing to call.
+ *
+ * Layer 1 means the server guard is rarely exercised from the browser. That is
+ * the point of defence in depth, not a redundancy to remove: the two lists are
+ * pinned together by tests/test_chat_parity.py.
+ */
+
+/* What is on screen. */
+var askLog = [];
+/* What the model is sent as prior context -- user and assistant prose only. */
+var askTurns = [];
+var askBusy = false;
+
+var ASK_EXAMPLES = [
+  'What is broken right now?',
+  'Why did the most recent incident happen?',
+  'What are the remediation steps?'
+];
+
+/* Model prose into paragraphs. richText escapes first and then re-permits only a
+   small inline allowlist, so nothing the model writes can introduce markup. */
+function askProse(text) {
+  var source = String(text == null ? '' : text).trim();
+  if (!source) return '<p class="meta">No answer came back.</p>';
+  return source.split(/\n{2,}/).map(function (para) {
+    return '<p>' + richText(para).replace(/\n/g, '<br>') + '</p>';
+  }).join('');
+}
+
+function askTurnHtml(entry) {
+  var who = entry.who === 'you' ? 'you' : 'assistant';
+  var tools = (entry.tools || []).length
+    ? '<div class="tools">' + entry.tools.map(function (name) {
+        return '<span class="tool-chip"><span aria-hidden="true">✓</span>' +
+          escapeHtml(name) + '</span>';
+      }).join('') + '</div>'
+    : '';
+  return '<div class="turn" data-who="' + who + '"' +
+    (entry.refused ? ' data-refused="true"' : '') + '>' +
+    '<div class="who">' + (who === 'you' ? 'You' : 'Arcadia') + '</div>' +
+    '<div class="bubble">' +
+      (who === 'you' ? '<p>' + escapeHtml(entry.text) + '</p>' : askProse(entry.text)) +
+    '</div>' + tools + '</div>';
+}
+
+/* Rebuild the whole transcript. Only for re-entering the view, never for a new
+   turn -- see askSay. */
+function askRepaint() {
+  var host = $('transcript');
+  if (!host || !askLog.length) return;
+  host.innerHTML = askLog.map(askTurnHtml).join('');
+}
+
+/* One turn, appended.
+ *
+ * Appending rather than repainting is an accessibility requirement, not an
+ * optimisation. #transcript is inside #viewHost, which is already a polite live
+ * region, so replacing its whole contents re-announces every earlier turn: by
+ * the fifth question a screen reader reads the entire conversation back. The
+ * turn itself is appended (announced once, as an addition) and the reply is also
+ * put in #askStatus, so what is announced is the answer rather than the
+ * surrounding chrome. */
+function askSay(who, text, tools, refused) {
+  var entry = { who: who, text: text, tools: tools || [], refused: !!refused };
+  askLog.push(entry);
+  var host = $('transcript');
+  if (!host) return;
+  /* Clears the "nothing asked yet" placeholder. */
+  if (askLog.length === 1) host.innerHTML = '';
+  var node = el(askTurnHtml(entry));
+  host.appendChild(node);
+  node.scrollIntoView({ block: 'nearest' });
+  if (who !== 'you') {
+    var status = $('askStatus');
+    if (status) status.textContent = text;
+  }
+}
+
+function askBusyState(on) {
+  askBusy = on;
+  var button = $('askSend');
+  var box = $('askInput');
+  if (button) {
+    button.disabled = on;
+    button.textContent = on ? 'Thinking…' : 'Ask';
+  }
+  if (box) box.disabled = on;
+}
+
+/* Open the approval card for a runbook or an incident the conversation named.
+ *
+ * A runbook id has to be resolved to its incident first: approval lives on the
+ * incident's detail card, which is keyed by alert id. */
+function openApproval(subject) {
+  var reveal = function (alertId) {
+    var pending = show('incidents');
+    var then = function () {
+      var detail = renderIncidentDetail(alertId);
+      if (detail && detail.then) {
+        detail.then(function () {
+          var card = $('ack') || $('approve');
+          if (card) card.scrollIntoView({ block: 'center' });
+        });
+      }
+    };
+    if (pending && pending.then) pending.then(then); else then();
+  };
+
+  if (/^RB-/i.test(subject)) {
+    api('/v1/runbooks/' + encodeURIComponent(subject)).then(function (runbook) {
+      if (runbook && runbook.alert_id) reveal(runbook.alert_id);
+      else toast('That runbook is not on any incident I can see.');
+    }).catch(function (err) { toast(err.message); });
+    return;
+  }
+  reveal(subject);
+}
+
+function askSubmit(text) {
+  var question = String(text || '').trim();
+  if (!question || askBusy) return;
+
+  askSay('you', question);
+  var box = $('askInput');
+  if (box) box.value = '';
+
+  /* Layer 1. Answered here, with no request made at all. */
+  var intent = routeIntent(question);
+  if (intent.intent === 'focus_approval') {
+    var blocked = approvalBlockReason(session.role);
+    if (blocked) {
+      askSay('assistant', blocked, [], true);
+      return;
+    }
+    var subject = intent.params.runbookId || intent.params.alertId || null;
+    askSay('assistant',
+      'Deciding on a remediation is a human action, so I will not do it from ' +
+      'here. ' + (subject
+        ? 'I have opened the approval card for ' + subject + ' — the decision is '
+        : 'Open the incident and use its approval card — the decision is ') +
+      'recorded against your name either way, and the runbook runs on your live ' +
+      'infrastructure. Ask me what the steps are first if you want them summarised.',
+      [], true);
+    if (subject) openApproval(subject);
+    return;
+  }
+
+  askBusyState(true);
+  api('/v1/chat', { method: 'POST', body: { message: question, history: askTurns.slice() } })
+    .then(function (data) {
+      askBusyState(false);
+      var reply = data.reply || '';
+      askSay('assistant', reply, data.tools_used || [], (data.refused_tools || []).length > 0);
+      askTurns.push({ role: 'user', content: question });
+      askTurns.push({ role: 'assistant', content: reply });
+      /* The server reaches this branch only for a client that skipped layer 1. */
+      if (data.focus === 'approval' && data.subject) openApproval(data.subject);
+    })
+    .catch(function (err) {
+      askBusyState(false);
+      askSay('assistant', err.message || 'I could not answer that just now.', [], true);
+    });
+}
+
+function renderAsk(host) {
+  host.innerHTML = '';
+  host.appendChild(el(
+    '<div class="view-head"><h1>Ask</h1>' +
+    '<p>Ask about anything happening in ' + escapeHtml(session.tenantId) +
+    '. Answers come from this organisation\'s own incidents, diagnoses and ' +
+    'runbooks — nothing else, and nothing from another organisation. ' +
+    'Approving a remediation stays a deliberate action on the incident itself.</p></div>'
+  ));
+
+  var card = el(
+    '<div class="card">' +
+    '<div class="ask-examples">' +
+    ASK_EXAMPLES.map(function (q) {
+      return '<button class="btn btn-quiet" data-example="' + escapeHtml(q) + '">' +
+        escapeHtml(q) + '</button>';
+    }).join('') +
+    '</div>' +
+    '<div class="transcript" id="transcript"></div>' +
+    '<p class="sr-only" id="askStatus" aria-live="polite" aria-atomic="true"></p>' +
+    '<form class="composer">' +
+      '<textarea class="input" id="askInput" rows="2" maxlength="2000" ' +
+        'aria-label="Your question" ' +
+        'placeholder="Why is checkout returning 5xx?"></textarea>' +
+      '<button class="btn btn-primary" id="askSend" type="submit">Ask</button>' +
+    '</form>' +
+    '<p class="ask-hint">Enter sends · Shift+Enter for a new line. ' +
+    'This assistant can only read — it cannot approve, decline or run a runbook.</p>' +
+    '</div>'
+  );
+  host.appendChild(card);
+
+  Array.prototype.forEach.call(card.querySelectorAll('button[data-example]'), function (b) {
+    b.addEventListener('click', function () { askSubmit(b.getAttribute('data-example')); });
+  });
+
+  var form = card.querySelector('form');
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    askSubmit($('askInput').value);
+  });
+  $('askInput').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      askSubmit($('askInput').value);
+    }
+  });
+
+  askRepaint();
+  if (!askLog.length) {
+    $('transcript').innerHTML =
+      '<div class="empty"><strong>Nothing asked yet</strong>' +
+      'Try one of the questions above, or type your own. Mentioning an incident ' +
+      'id like <code>ALT-1042</code> points the answer straight at it.</div>';
+  }
+}
+
 /* ---------- incidents ---------- */
 
 function severityBadge(severity) {
@@ -1290,7 +1591,7 @@ function severityBadge(severity) {
 }
 
 function renderIncidents(host) {
-  api('/v1/alerts').then(function (data) {
+  return api('/v1/alerts').then(function (data) {
     var alerts = data.alerts || [];
     host.innerHTML = '';
     host.appendChild(el(
@@ -1350,7 +1651,7 @@ function renderIncidentDetail(alertId) {
   var host = $('detail');
   host.innerHTML = '<div class="card"><div class="empty">Loading incident…</div></div>';
 
-  Promise.all([
+  return Promise.all([
     api('/v1/alerts/' + encodeURIComponent(alertId) + '/status'),
     api('/v1/diagnostics/' + encodeURIComponent(alertId)).catch(function (e) {
       /* 404 simply means the pipeline has not produced one yet. */
